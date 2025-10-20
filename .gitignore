@@ -47,3 +47,9 @@ po/*~
 
 # RStudio Connect folder
 rsconnect/
+
+# Work In Progress folder
+WIP/
+
+# Legacy Functions folder
+Legacy/

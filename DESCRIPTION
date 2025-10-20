@@ -1,0 +1,27 @@
+Package: sydni
+Type: Package
+Title: Synthetic Data Augmentation with Noise Inference
+Version: 0.1.0
+Author: Hohjin Im
+Maintainer: Hohjin Im <hohjini@uci.edu>
+Description: Synthetic Data Augmentation with Noise Inference (sydni) for 
+    robustness checks.
+License: GPL (>= 2)
+Encoding: UTF-8
+Depends:
+    R (>= 4.4.0)
+Imports:
+    dplyr,
+    purrr,
+    truncnorm,
+    brms,
+    copula,
+    corpcor,
+    infotheo,
+    rlang,
+    progress
+Suggests:
+    cmdstanr
+Remotes:
+    github::stan-dev/cmdstanr
+RoxygenNote: 7.3.2

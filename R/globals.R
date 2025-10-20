@@ -1,0 +1,10 @@
+utils::globalVariables(
+  c(
+    ".",
+    "composite",
+    "var",
+    "n",
+    "group_id",
+    "sd_scale"
+  )
+)
