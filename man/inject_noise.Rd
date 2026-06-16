@@ -16,82 +16,43 @@ inject_noise(
 )
 }
 \arguments{
-\item{x}{A vector of type integer, numeric, or ordered factor.}
+\item{x}{A vector of type integer, numeric, factor, or ordered factor.}
 
-\item{method}{Character. One of "discrete", "truncnormal", "gaussian", or
-"random".
-\describe{
-  \item{\code{discrete}}{
-    For integers or ordered factors, adds noise with possible values
-    -1, 0, or +1, where
-    \eqn{P(\pm1) = \frac{c}{2}, \quad P(0) = 1 - c}.
-    For continuous inputs, adds uniform noise:
-    \eqn{\varepsilon \sim \mathrm{Uniform}(-c \cdot \mathrm{sd}(x),\; c \cdot \mathrm{sd}(x))}.
-  }
-  \item{\code{truncnormal}}{
-    Adds noise from a truncated normal distribution centered at 0:
-    \eqn{\varepsilon \sim \mathrm{TruncNormal}(0, (c \cdot \mathrm{sd}(x))^2,\;
-    [-c \cdot \mathrm{sd}(x),\; c \cdot \mathrm{sd}(x)])}.
-    Rounded to ±1 if input is integer-like.
-  }
-  \item{\code{gaussian}}{
-    Adds noise from a normal distribution:
-    \eqn{\varepsilon \sim \mathcal{N}(0,\; (c \cdot \mathrm{sd}(x))^2)}.
-    Rounded if input is integer-like.
-  }
-  \item{\code{random}}{
-    Adds uniform noise independent of data scale:
-    \eqn{\varepsilon \sim \mathrm{Uniform}(-r,\; r)}.
-  }
-}}
+\item{method}{Character. One of `"discrete"`, `"truncnormal"`, `"gaussian"`,
+or `"random"`.}
 
-\item{c}{A numeric value in (0, 1). Used to scale the standard deviation of
-the noise. Defaults to "auto", in which case it is computed based on either
-\code{p} (for discrete) or \code{f} (for continuous) inputs.}
+\item{c}{A numeric value in `(0, 1)`. Used to scale the standard deviation of
+the noise. Defaults to `"auto"`, in which case it is computed based on
+either `p` (for discrete) or `f` (for continuous) inputs.}
 
-\item{round_int}{Logical. If TRUE (default), integer or ordered factor inputs
-are rounded to the nearest whole number after noise is added.}
+\item{round_int}{Logical. If `TRUE` (default), integer-like inputs are
+rounded to the nearest whole number after noise is added.}
 
-\item{p}{Numeric. Probability mass to assign to jumps of ±1 in the discrete
-case (used only if \code{c = "auto"}).}
+\item{p}{Numeric. Probability that a discrete integer-like value receives a
+non-zero perturbation when `c = "auto"`.}
 
-\item{f}{Numeric. Fraction of standard deviation to approximate when using
-continuous noise (used only if \code{c = "auto"}).}
+\item{f}{Numeric. Target ratio of noise variance to data variance for
+continuous noise when `c = "auto"`.}
 
-\item{r}{Numeric. Maximum magnitude of noise when using \code{method =
-"random"}.}
+\item{r}{Numeric. Maximum magnitude of noise when `method = "random"`.}
 
 \item{bounds}{Optional numeric vector of length 2. If specified, clamps
 output to these lower and upper bounds. Otherwise, clamps to the range of
 `x`.}
 }
 \value{
-A vector of the same length and type as `x`, with noise added.
+A vector of the same length and compatible type as `x`, with noise
+  added.
 }
 \description{
 Adds a small amount of noise to a single variable using one of several
-methods: "discrete", "truncnormal", "gaussian", or "random". The function
-automatically detects whether the input is an integer, ordered factor, or
-continuous numeric, and preserves the original value range.
+methods: `"discrete"`, `"truncnormal"`, `"gaussian"`, or `"random"`. The
+function automatically detects whether the input is integer-like, ordered,
+or continuous and preserves the original range.
 }
 \details{
-\strong{Detection of integer-ness:}
-\enumerate{
-  \item If `x` is of class integer or an ordered factor, it is treated as integer.
-  \item If `x` is numeric and all values are effectively whole numbers (within machine tolerance),
-        it is treated as integer.
-  \item Otherwise, it is treated as continuous.
-}
-
-After generating noise, the function adds it to `x`, clamps the result to the
-original or specified range, and rounds if requested. The result preserves
-the type of `x`.
-}
-\examples{
-x_int  <- sample(1:5, 100, TRUE)
-inject_noise(x_int, method = "discrete", c = 0.1)
-
-x_real <- rnorm(100, 50, 10)
-inject_noise(x_real, method = "gaussian", c = 0.05, round_int = FALSE)
-
+For integer-like or ordered variables, `method = "discrete"` adds noise from
+`-1`, `0`, or `+1` with probabilities `c / 2`, `1 - c`, and `c / 2`,
+respectively. For continuous variables, the same method uses uniform noise in
+`[-c * sd(x), c * sd(x)]`.
 }

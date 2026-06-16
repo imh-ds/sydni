@@ -1,216 +1,196 @@
-#' SYDNI Engine: Bayesian Regression Model
+#' SYDNI Engine: Bayesian regression models
 #'
-#' @description Fits a collection of Bayesian regression models with the
-#'   \code{brms} package and draws posterior-predictive samples to create a
-#'   fully synthetic data set.  Each target variable is modeled conditionally on
-#'   a user-chosen subset of other variables and (optionally) external
-#'   covariates, allowing realistic multivariate dependence. The function
-#'   supports several noise-injection schemes, adaptive shrinkage priors, and
-#'   multiple Stan backends as a general engine for the SYDNI framework.
-#'
+#' @description
+#' Fits a collection of Bayesian regression models with \pkg{brms} on the
+#' observed data and draws posterior-predictive samples for a
+#' bootstrap-resampled, noise-injected feeder dataset. Each target variable is
+#' modeled conditionally on a user-chosen subset of other variables and optional
+#' covariates.
 #'
 #' @details
+#' The BRM engine is SYDNI's parametric conditional-model engine. It generates
+#' synthetic data by fitting one Bayesian regression model per synthesized
+#' variable on the observed data, then drawing posterior-predictive values for a
+#' bootstrap-resampled and noise-injected feeder dataset. It is most appropriate
+#' when the analyst wants explicit conditional relationships among variables and
+#' wants the fitted models to remain inspectable through \pkg{brms}.
 #'
-#' \code{engine_brm()} is a two-stage synthesizer:
+#' Let \eqn{D = \{x_i\}_{i=1}^{n_{\mathrm{obs}}}} be the observed data,
+#' \eqn{V = \{v_1,\ldots,v_p\}} be the synthesized variables, and
+#' \eqn{C = \{c_1,\ldots,c_q\}} be optional covariates. The requested synthetic
+#' sample size is \eqn{n_{\mathrm{aug}}}.
 #'
-#' \strong{Perturb the original data.} A bootstrap sample of size
-#' \eqn{n_{\mathrm{aug}}} is drawn from the input data (with or without
-#' replacement). Before any modelling, the selected columns are jittered by an
-#' i.i.d. noise term \eqn{\varepsilon}. This step both widens the support of
-#' each variable (to allow generative flexibility) and introduces uncertainty.
+#' The engine proceeds in six steps:
 #'
-#' The noise distribution depends on the variable type (continuous vs.
-#' integer-like) and the \code{noise_method}:
-#'
-#'     \itemize{
-#'       \item \code{"discrete"}:
-#'         \emph{If} the variable is integer-like, adds noise from
-#'         \eqn{\varepsilon \in \{-1, 0, +1\}} with
-#'         \eqn{P(\varepsilon = \pm 1) = c / 2}, \eqn{P(\varepsilon = 0) = 1 - c}.
-#'         \emph{If} the variable is continuous, instead adds
-#'         \eqn{\varepsilon \sim \mathrm{Uniform}(-c \cdot \mathrm{sd}(x),\ c \cdot \mathrm{sd}(x))}.
-#'
-#'       \item \code{"gaussian"}:
-#'         Adds Gaussian noise
-#'         \eqn{\varepsilon \sim \mathcal{N}(0,\ (c \cdot \mathrm{sd}(x))^2)}.
-#'         Rounded if the input is integer-like.
-#'
-#'       \item \code{"truncnormal"}:
-#'         Adds truncated normal noise
-#'         \eqn{\varepsilon \sim \mathrm{TruncNormal}(0,\ (c \cdot \mathrm{sd}(x))^2,\ [-c \cdot \mathrm{sd}(x),\ c \cdot \mathrm{sd}(x)])}.
-#'         Also rounded if the input is integer-like.
-#'
-#'       \item \code{"random"}:
-#'         Adds unscaled uniform noise
-#'         \eqn{\varepsilon \sim \mathrm{Uniform}(-r,\ r)},
-#'         independent of the data's standard deviation.
-#'     }
-#'
-#' For all methods, the post-noise value is clamped to either the original or
-#' user-specified bounds, and optionally rounded (via \code{round_int}) to
-#' preserve the data's structure.
-#'
-#' \strong{Model each target column conditionally on others.} For each variable
-#' \eqn{y_m} listed in \code{variables}, a subset of predictors \eqn{z_m} is
-#' selected:
-#'
-#'     \itemize{
-#'       \item \code{"full"}: all other variables
-#'       \item \code{"random"}: a random subset of size \code{predictor_k}
-#'       \item \code{"information"}: top \eqn{k} variables ranked by mutual information with \eqn{y_m}
-#'       \item \code{"random_information"}: random draw from the top \eqn{5k} informative variables
-#'     }
-#'
-#' Any covariates passed via \code{covariates} are also included in the model.
-#'
-#' Each \eqn{y_m} is modelled with a Bayesian regression of the form:
-#'
+#' \enumerate{
+#'   \item Draw a feeder sample \eqn{\tilde{D}} of size
+#'     \eqn{n_{\mathrm{aug}}} from \eqn{D} using \code{dplyr::slice_sample()}:
 #'     \deqn{
-#'       \eta_m = \beta_{0m} + z_m^T \beta_m
+#'       \tilde{D} = \{x_{s_i}: s_i \sim
+#'       \mathrm{Uniform}(\{1,\ldots,n_{\mathrm{obs}}\})\}_{i=1}^{n_{\mathrm{aug}}}.
+#'     }
+#'     If \code{replace = FALSE}, the indices are sampled without replacement.
+#'
+#'   \item Inject noise into the synthesized columns of \eqn{\tilde{D}} to form
+#'     the feeder data \eqn{\tilde{D}_{\varepsilon}}. Covariates are not
+#'     perturbed. For a synthesized column \eqn{x}, the noisy value is
+#'     \deqn{
+#'       x_i^{\varepsilon} =
+#'       \mathrm{clip}(x_i + \varepsilon_i,\; L_x,\; U_x),
+#'     }
+#'     where \eqn{[L_x,U_x]} is either \code{noise_bounds} or the observed range
+#'     of \eqn{x}. Integer-like, factor, and ordered-factor columns are rounded
+#'     and reconstructed after perturbation when \code{round_int = TRUE}.
+#'     Four noise methods are available through \code{noise_method}:
+#'     \code{"discrete"}, \code{"gaussian"}, \code{"truncnormal"}, and
+#'     \code{"random"}. The method-specific distributions, automatic scaling
+#'     rules for \code{c}, and type reconstruction details are implemented in
+#'     \code{\link[=inject_noise]{inject_noise()}} and applied column-wise by
+#'     \code{\link[=add_noise]{add_noise()}}.
+#'
+#'   \item For each target variable \eqn{v_m \in V}, choose a predictor set
+#'     \eqn{Z_m \subseteq V \setminus \{v_m\}} using
+#'     \code{predictor_method}. \code{"full"} uses all remaining synthesized
+#'     variables. \code{"random"} samples \code{predictor_k} of them uniformly.
+#'     \code{"information"} ranks candidates by normalized mutual information
+#'     and takes the top \code{predictor_k}. \code{"random_information"} ranks
+#'     candidates by normalized mutual information, keeps the top
+#'     \eqn{5 k_{\mathrm{pred}}}, and samples \eqn{k_{\mathrm{pred}}} from
+#'     that short list, where \eqn{k_{\mathrm{pred}}} is \code{predictor_k}.
+#'
+#'     The normalized mutual information score used for ranking is
+#'     \deqn{
+#'       \mathrm{NMI}(X,Y) =
+#'       \frac{I(X;Y)}{\max\{H(X),H(Y)\}},
+#'     }
+#'     where \eqn{I(X;Y)} is mutual information and \eqn{H(\cdot)} is entropy.
+#'     Numeric variables with many unique values are discretized into quantile
+#'     bins before scoring. The final right-hand side for target \eqn{v_m} is
+#'     \eqn{Z_m \cup C}; if this set is empty, the model is intercept-only:
+#'     \deqn{
+#'       v_m \sim 1.
 #'     }
 #'
-#' The outcome distribution is chosen by \code{brms} based on variable type (or
-#' manually via \code{families}).
+#'   \item Assign a \pkg{brms} family \eqn{F_m} to each target. If
+#'     \code{families} supplies a named family for \eqn{v_m}, that family is
+#'     used. Otherwise, SYDNI chooses a family from the observed target type:
+#'     binary factors use Bernoulli logit models, ordered factors and
+#'     Likert-like integers use cumulative logit models, unordered factors use
+#'     categorical logit models, non-negative integer counts use Poisson or
+#'     negative-binomial models, proportions in \eqn{(0,1)} use beta models,
+#'     and other numeric variables use Gaussian models.
 #'
-#' \strong{Adaptive shrinkage prior:}  
-#' Each regression coefficient \eqn{\beta_{jm}} is given a normal prior whose
-#' standard deviation shrinks based on the relative size of the synthetic sample.
-#' Specifically, the prior is defined as:
+#'   \item Fit one conditional Bayesian regression model on the observed data
+#'     for each target. In generic form, the linear predictor is
+#'     \deqn{
+#'       \eta_{im} = \alpha_m + z_{im}^{\top}\beta_m +
+#'       c_i^{\top}\gamma_m,
+#'     }
+#'     with outcome model
+#'     \deqn{
+#'       v_{im} \mid z_{im}, c_i, \theta_m \sim F_m(\eta_{im}, \phi_m),
+#'     }
+#'     where \eqn{\theta_m} denotes all fitted parameters for target
+#'     \eqn{v_m}; \eqn{\phi_m} denotes any family-specific auxiliary parameter
+#'     such as residual scale, shape, or overdispersion.
 #'
-#' \deqn{
-#'   \beta_{jm} \sim \mathcal{N}(0,\ \sigma_\beta^2), \quad
-#'   \sigma_\beta = \frac{\mathrm{base\_sd}}{(1 + \frac{n_{\mathrm{syn}}}{n_{\mathrm{obs}}})^k}
+#'     Slope priors are shrunk as the requested augmentation grows:
+#'     \deqn{
+#'       \beta_{jm}, \gamma_{\ell m} \sim
+#'       \mathcal{N}(0,\; \sigma_{\beta}^{2}),
+#'       \qquad
+#'       \sigma_{\beta} =
+#'       \frac{\mathrm{base\_sd}}
+#'       {\left(1 + n_{\mathrm{aug}} / n_{\mathrm{obs}}\right)^k}.
+#'     }
+#'     Larger values of \code{k} make the conditional models more conservative
+#'     as the synthetic sample size grows. This shrinkage is intended to
+#'     discourage synthetic augmentation from behaving like naive sample-size
+#'     inflation.
+#'
+#'     The intercept prior is estimated from the observed target distribution:
+#'     \deqn{
+#'       \alpha_m \sim
+#'       \mathcal{N}(\bar{v}_m,\; (s_m\,\mathrm{sd\_scale})^2),
+#'     }
+#'     where \eqn{\bar{v}_m} and \eqn{s_m} are the observed mean and standard
+#'     deviation of target \eqn{v_m}. These priors are passed to \pkg{brms} as
+#'     class \code{"b"} and class \code{"Intercept"} priors.
+#'
+#'   \item Generate synthetic target values from the posterior predictive
+#'     distribution using the noisy feeder rows as \code{newdata}. For feeder
+#'     row \eqn{i} and target \eqn{v_m},
+#'     \deqn{
+#'       v_{im}^{\star} \sim
+#'       p(v_m \mid z_{im}^{\varepsilon}, c_i, D, F_m).
+#'     }
+#'     In implementation, \code{brms::posterior_predict()} returns a matrix
+#'     \eqn{P_m} with posterior draws in rows and feeder observations in
+#'     columns. SYDNI samples one posterior row independently for each feeder
+#'     observation:
+#'     \deqn{
+#'       v_{im}^{\star} = P_m[r_i, i],
+#'       \qquad
+#'       r_i \sim \mathrm{Uniform}(\{1,\ldots,R_m\}),
+#'     }
+#'     where \eqn{R_m} is the number of retained posterior predictive draws.
+#'     The resulting vector is reconstructed to match the observed target:
+#'     factors are mapped back to valid levels, integer-like outcomes are
+#'     rounded and clamped to the observed range, and continuous numeric
+#'     outcomes are clamped to the observed range.
 #' }
 #'
-#' where \eqn{n_{\mathrm{obs}}} is the number of original (observed) data points,
-#' \eqn{n_{\mathrm{syn}}} is the number of synthetic records, and \eqn{k} is a
-#' scaling exponent controlling how aggressively the prior tightens.
+#' The final synthetic dataset is assembled column-wise as
+#' \deqn{
+#'   D^{\star} =
+#'   \left[v_1^{\star},\ldots,v_p^{\star}, C_{\mathrm{feeder}}\right],
+#' }
+#' where \eqn{C_{\mathrm{feeder}}} is included only when \code{covariates} are
+#' supplied. The returned \code{models} element contains the fitted \pkg{brms}
+#' model for each synthesized target, and the returned \code{data} element
+#' contains \eqn{D^{\star}}.
 #'
-#' As \eqn{n_{\mathrm{syn}}} increases relative to \eqn{n_{\mathrm{obs}}},
-#' the prior variance shrinks, discouraging the model from overfitting
-#' synthetic noise. This helps maintain stability during iterative generation
-#' or large-scale synthesis.
-#'
-#' \strong{Posterior prediction:} From each fitted model \eqn{\mathcal{M}_m}, a
-#' posterior-predictive draw is made for each row in the noisy data:
-#'
-#'     \deqn{
-#'       \hat{y}_m^{(i)} \sim p(y_m \mid z_m^{(i)},\ \mathcal{M}_m), \quad i = 1, \dots, n_{\mathrm{aug}}
-#'     }
-#'
-#' These predicted values constitute the synthetic version of \eqn{y_m}.
+#' The BRM engine should be interpreted as a robustness and sensitivity-analysis
+#' engine. It does not make synthetic rows into additional empirical evidence,
+#' and it does not provide disclosure protection on its own.
 #'
 #' @param data A data frame or tibble.
-#' @param variables A tidyselect specification indicating which columns in
-#'   \code{data} to synthesize.
-#' @param covariates A tidyselect specification indicating which columns in
-#'   \code{data} to use as covariates in the synthetic data generation process.
-#' @param noise_method Character. One of "discrete", "truncnormal", "gaussian",
-#'   or "random".
-#'   \describe{
-#'     \item{\code{discrete}}{
-#'       For integers or ordered factors, adds noise with possible values
-#'       -1, 0, or +1, where
-#'       \eqn{P(\pm1) = \frac{c}{2}, \quad P(0) = 1 - c}.
-#'       For continuous inputs, adds uniform noise:
-#'       \eqn{\varepsilon \sim \mathrm{Uniform}(-c \cdot \mathrm{sd}(x),\; c \cdot \mathrm{sd}(x))}.
-#'     }
-#'     \item{\code{truncnormal}}{
-#'       Adds noise from a truncated normal distribution centered at 0:
-#'       \eqn{\varepsilon \sim \mathrm{TruncNormal}(0, (c \cdot \mathrm{sd}(x))^2,\;
-#'       [-c \cdot \mathrm{sd}(x),\; c \cdot \mathrm{sd}(x)])}.
-#'       Rounded to ±1 if input is integer-like.
-#'     }
-#'     \item{\code{gaussian}}{
-#'       Adds noise from a normal distribution:
-#'       \eqn{\varepsilon \sim \mathcal{N}(0,\; (c \cdot \mathrm{sd}(x))^2)}.
-#'       Rounded if input is integer-like.
-#'     }
-#'     \item{\code{random}}{
-#'       Adds uniform noise independent of data scale:
-#'       \eqn{\varepsilon \sim \mathrm{Uniform}(-r,\; r)}.
-#'     }
-#'   }
-#' @param c A numeric value in (0, 1). Used to scale the standard deviation of
-#'   the noise. Defaults to "auto", in which case it is computed based on either
-#'   \code{p} (for discrete) or \code{f} (for continuous) inputs.
-#' @param round_int Logical. If TRUE (default), integer or ordered factor inputs
-#'   are rounded to the nearest whole number after noise is added.
-#' @param p Numeric. Probability mass to assign to jumps of ±1 in the discrete
-#'   case (used only if \code{c = "auto"}).
-#' @param f Numeric. Fraction of standard deviation to approximate when using
-#'   continuous noise (used only if \code{c = "auto"}).
-#' @param r Numeric. Maximum magnitude of noise when using \code{method =
-#'   "random"}.
-#' @param noise_bounds Optional numeric vector of length 2. If specified, clamps
-#'   output to these lower and upper bounds. Otherwise, clamps to the range of
-#'   \code{x}.
-#' @param predictor_method String. Specifies the method used to determine which
-#'   variables to use in the synthesis engine as predictors. Default is
-#'   \code{random_information}.
-#' @param predictor_k Integer. Specifies the number of variables to use in the
-#'   synthesis engine as predictors. Default is \code{NULL}, which automatically
-#'   determines the number.
-#' @param replace Logic. Determines whether to resample with replacement.
-#'   Default is \code{TRUE}.
-#' @param n_aug Numeric. The sample size of the synthetic data to generate.
-#' @param families A named list of families to use manually, where names
-#'   correspond to column names in \code{data} and values are \code{brmsfamily}
-#'   objects.
-#' @param base_sd Numeric. The base standard deviation for the prior when no
-#'   synthetic data is used. Default is 10.
-#' @param sd_scale Numeric. Multiplier for the standard deviation of `y` to set
-#'   the prior's spread. A value of 2 approximates a 95% coverage around the
-#'   sample mean. Default is 2.
-#' @param k Numeric. A scaling exponent controlling the rate of shrinkage.
-#'   Higher values shrink the prior more aggressively as synthetic data
-#'   increases. Default is 2.
-#' @param chains Numeric. Number of Markov chains (Default is 2).
-#' @param cores Integer. Number of CPU cores to use for parallel computation. By
-#'   default, the number of available cores minus one is used:
-#'   \code{parallel::detectCores() - 1}. For best performance, you may set this
-#'   manually to match your system's capabilities.
-#' @param iter Numeric. Number of iterations per chain, inclusive of warmup.
-#'   Default is 500.
-#' @param warmup Integer. Specifies the number of warmup (or burn-in)
-#'   iterations. These iterations are used for step size adaptation and are not
-#'   included in the posterior samples. By default, this is set to
-#'   \code{floor(iter / 2)}.
-#' @param thin Integer. Specifies the thinning interval for saving iterations.
-#'   Every \code{thin}-th iteration is retained. Thinning helps reduce memory
-#'   usage and autocorrelation in long chains. Defaults to \code{2}.
-#' @param algorithm String. Specifies the estimation algorithm to use. Default
-#'   is \code{"fullrank"}.
+#' @param variables Character vector of columns in `data` to synthesize.
+#' @param covariates Character vector of columns in `data` to use as covariates.
+#' @param noise_method Character. One of `"discrete"`, `"truncnormal"`,
+#'   `"gaussian"`, or `"random"`.
+#' @param c A numeric value in `(0, 1)` or `"auto"`.
+#' @param round_int Logical. If `TRUE`, integer-like inputs are rounded after
+#'   noise injection.
+#' @param p Numeric. Probability control for discrete noise when `c = "auto"`.
+#' @param f Numeric. Variance ratio control for continuous noise when `c =
+#'   "auto"`.
+#' @param r Numeric. Maximum noise magnitude for `noise_method = "random"`.
+#' @param noise_bounds Optional numeric vector of length 2 used to clamp
+#'   synthesized values.
+#' @param predictor_method String. One of `"random_information"`, `"random"`,
+#'   `"information"`, or `"full"`.
+#' @param predictor_k Integer. Number of synthesized variables to use as
+#'   predictors for each conditional model.
+#' @param replace Logical. Determines whether bootstrap resampling uses
+#'   replacement.
+#' @param n_aug Numeric. Number of synthetic rows to generate.
+#' @param families Optional named list of \pkg{brms} families to use manually.
+#' @param base_sd Numeric. Base standard deviation for slope priors.
+#' @param sd_scale Numeric. Scale multiplier used to estimate intercept priors.
+#' @param k Numeric. Shrinkage exponent for slope priors.
+#' @param chains Numeric. Number of Markov chains.
+#' @param cores Integer or `"auto"`. Number of CPU cores for model fitting.
+#' @param iter Numeric. Number of iterations per chain.
+#' @param warmup Integer. Number of warmup iterations.
+#' @param thin Integer. Thinning interval.
+#' @param algorithm String. `brms` algorithm to use.
+#' @param backend Character. One of `"rstan"` or `"cmdstanr"`.
+#' @param seed Numeric. Seed for reproducibility.
 #'
-#'   Available options include:
-#'   \itemize{
-#'     \item \code{"fullrank"}: Variational inference with a full-rank multivariate normal approximation.
-#'     \item \code{"meanfield"}: Variational inference with independent normal distributions (fast but approximate).
-#'     \item \code{"sampling"}: Full Bayesian inference via Markov chain Monte Carlo (MCMC).
-#'     \item \code{"pathfinder"}: Quasi-variational inference using optimization-based approximations.
-#'     \item \code{"laplace"}: Laplace approximation around the posterior mode.
-#'     \item \code{"fixed_param"}: No inference; generates samples using fixed parameter values (e.g., for simulation).
-#'   }
-#'
-#' @param backend Character string specifying which backend to use for fitting
-#'   the Stan model. Options are \code{"rstan"} (the default) or
-#'   \code{"cmdstanr"}.
-#'
-#'   Although \code{"rstan"} is the default, it is recommended to use
-#'   \code{"cmdstanr"} for better performance and parallelization. To use
-#'   \code{cmdstanr}, install the package from GitHub. For more details, see:
-#'   \url{https://mc-stan.org/cmdstanr/}
-#' @param seed Numeric. The seed for the random number generation for
-#'   reproducibility. Default is \code{NA}.
-#'
-#' @return A named list with the following elements:
-#' \describe{
-#'   \item{\code{models}}{A list of model fit objects used to generate the synthetic data.}
-#'   \item{\code{data}}{A data frame containing the synthetic data generated from the fitted models.}
-#' }
+#' @return A named list with elements `models` and `data`.
 #'
 #' @importFrom stats as.formula
-#' 
 #' @export
 engine_brm <- function(
     data,
@@ -234,252 +214,198 @@ engine_brm <- function(
     chains = 2,
     cores = "auto",
     iter = 500,
-    warmup = floor(iter/2),
+    warmup = floor(iter / 2),
     thin = 2,
     algorithm = c("fullrank", "meanfield", "sampling", "pathfinder", "laplace", "fixed_param"),
     backend = c("rstan", "cmdstanr"),
     seed = NA
 ) {
-  
-
-  # MATCH ARGUMENTS ---------------------------------------------------------
-  
   noise_method <- match.arg(noise_method)
   predictor_method <- match.arg(predictor_method)
   algorithm <- match.arg(algorithm)
   backend <- match.arg(backend)
-  
 
-  # FUNCTION ----------------------------------------------------------------
-  
-  # If variables is NULL, then get all variables
-  if(is.null(variables)) {
-    
-    variables <- setdiff(colnames(data), covariates)
-    
+  if (!requireNamespace("brms", quietly = TRUE)) {
+    stop("The 'brms' package must be installed to use `engine = 'brm'`.")
   }
-  
-  # Create formula functions
-  formulas <- setNames(
-    lapply(
-      variables,
-      function(x) {
-        
-        # If predictor method is set to full
-        if (predictor_method == "full") {
-          
-          predictors <- setdiff(variables, x)
-          
-        }
-        
-        # If predictor method is set to random
-        if (predictor_method == "random") {
-          
-          predictors <- sample(setdiff(variables, x), predictor_k)
-          
-        }
-        
-        # If predictor method is set to information
-        if (predictor_method == "information") {
-          
-          # Get top normalized MI predictors from other variables
-          nmi_values <- normalized_mi_scores(
-            x, data, variables
-          )
-          
-          # Sort MI values from largest to smallest
-          nmi_sorted <- sort(nmi_values, decreasing = TRUE)
-          
-          # Get top k
-          predictors <- names(nmi_sorted)[1:predictor_k]
-          
-        }
-        
-        # If predictor method is set to information random mix
-        if (predictor_method == "random_information") {
-          
-          # Get top normalized MI predictors from other variables
-          nmi_values <- normalized_mi_scores(
-            x, data, variables
-          )
-          
-          # Sort MI values from largest to smallest
-          nmi_sorted <- sort(nmi_values, decreasing = TRUE)
-          
-          # Get top k*5 MI values
-          nmi_top <- names(nmi_sorted)[1:(min(predictor_k*5, length(variables)-1))]
-          
-          predictors <- sample(nmi_top, size = predictor_k, replace = FALSE)
-          
-        }
-        
-        # Combine with covariates (if any)
-        rhs <- if (!is.null(covariates)) {
-          paste0(c(predictors, covariates), collapse = " + ")
-        } else {
-          paste0(predictors, collapse = " + ")
-        }
-        
-        # Create formula
-        as.formula(
-          paste0(x, " ~ ", rhs)
-        )
-        
-      }
-    ),
-    variables)
-  
-  
-  # Randomly sample with replacement ---
-  
-  # Set arguments
-  args <- list(
-    data, 
+
+  if (is.null(variables)) {
+    variables <- setdiff(colnames(data), covariates)
+  }
+
+  if (length(variables) < 1) {
+    stop("`variables` must contain at least one synthesized column.")
+  }
+
+  if (is.null(predictor_k)) {
+    predictor_k <- max(1, round((length(variables) - 1) / 3))
+    message(
+      paste0("Predictor k not specified. Defaulting to ", predictor_k, ".")
+    )
+  }
+
+  predictor_k <- min(predictor_k, max(length(variables) - 1, 0))
+
+  make_predictors <- function(target, training_data) {
+    others <- setdiff(variables, target)
+
+    if (length(others) == 0) {
+      return(character())
+    }
+
+    if (predictor_method == "full") {
+      return(others)
+    }
+
+    if (predictor_method == "random") {
+      return(sample(others, predictor_k, replace = FALSE))
+    }
+
+    nmi_values <- normalized_mi_scores(
+      target = target,
+      data = training_data,
+      variables = variables
+    )
+    nmi_sorted <- sort(nmi_values, decreasing = TRUE)
+
+    if (predictor_method == "information") {
+      return(names(nmi_sorted)[seq_len(min(predictor_k, length(nmi_sorted)))])
+    }
+
+    nmi_top <- names(nmi_sorted)[seq_len(min(predictor_k * 5, length(nmi_sorted)))]
+    sample(nmi_top, size = min(predictor_k, length(nmi_top)), replace = FALSE)
+  }
+
+  sampled_data <- with_seed(seed, dplyr::slice_sample(
+    .data = data,
     replace = replace,
     n = n_aug
-  )
-  
-  # Sample data
-  sampled_data <- do.call(
-    dplyr::slice_sample,
-    args
-  )
-  
-  # Inject noise to sampled data
-  noisy_data <- add_noise(
-    sampled_data,
-    variables = variables,
+  ))
+
+  feeder_data <- add_noise(
+    data = sampled_data,
+    variables = dplyr::all_of(variables),
     method = noise_method,
-    c = c, 
-    p = p, 
+    c = c,
+    p = p,
     f = f,
     round_int = round_int,
     r = r,
     bounds = noise_bounds
   )
-  
-  # Get variable families
+
   variable_families <- assign_families(
     data = data,
     variables = variables,
     manual_families = families
   )
-  
-  # Create a new progress bar for generating brm models
-  pb <- progress::progress_bar$new(
-    format = "  Generating Data [:bar] :percent ETA: :eta",
-    total  = length(variables),
-    clear  = FALSE,
-    width  = 100
-  )
-  
-  # Beta shrinkage
-  b_shrinkage <- estimate_shrinkage_prior(
-    n_obs   = nrow(data),
-    n_syn   = n_aug,
-    base_sd = base_sd,
-    k       = k
-  )
-  
-  # Get predicted values
-  brm_models <- setNames(
+
+  formulas <- with_seed(seed, stats::setNames(
     lapply(
       variables,
-      function(v) {
-        
-        # Intercept prior
+      function(target) {
+        predictors <- make_predictors(target, data)
+        rhs_terms <- c(predictors, covariates)
+        rhs <- if (length(rhs_terms) == 0) "1" else paste(rhs_terms, collapse = " + ")
+        stats::as.formula(paste0(target, " ~ ", rhs))
+      }
+    ),
+    variables
+  ))
+
+  pb <- progress::progress_bar$new(
+    format = "  Generating Data [:bar] :percent ETA: :eta",
+    total = length(variables),
+    clear = FALSE,
+    width = 100
+  )
+
+  b_shrinkage <- estimate_shrinkage_prior(
+    n_obs = nrow(data),
+    n_syn = n_aug,
+    base_sd = base_sd,
+    k = k
+  )
+
+  brm_models <- stats::setNames(
+    lapply(
+      seq_along(variables),
+      function(i) {
+        v <- variables[[i]]
         intercept_prior <- estimate_intercept_prior(
-          y        = data[[v]],
+          y = data[[v]],
           sd_scale = sd_scale
         )
-        
-        # Fit
-        model <- suppressMessages(
-          quiet_brm(
-            formula   = formulas[[v]],
-            data      = data,
-            family    = variable_families[[v]],
-            prior     = c(b_shrinkage, intercept_prior),
-            chains    = chains,
-            cores     = if (cores=="auto") {parallel::detectCores()-1} else {cores},
-            iter      = iter,
-            warmup    = warmup,
-            thin      = thin,
-            algorithm = algorithm,
-            seed      = seed,
-            backend   = backend,
-            
-            # Silence all output messages
-            refresh   = 0,
-            silent    = 2
-          )
-        )
-        
-        # Build newdata
-        preds <- noisy_data |> 
-          dplyr::select(
-            dplyr::all_of(
-              all.vars(formulas[[v]])[-1]
+
+        if (isTRUE(getOption("sydni.brm_verbose", FALSE))) {
+          message(
+            paste0(
+              "Fitting BRM target ", i, "/", length(variables), ": ", v,
+              " | family = ", variable_families[[v]]$family,
+              " | formula = ", paste(deparse(formulas[[v]]), collapse = "")
             )
           )
-        
-        # Draw
-        pp      <- brms::posterior_predict(model, newdata = preds)
-        nrow_pp <- nrow(pp)
-        ncol_pp <- ncol(pp)
-        rows    <- sample(nrow_pp, ncol_pp, replace = TRUE)
-        
-        vec     <- as.integer(pp[cbind(rows, seq_len(ncol_pp))])
-        
-        # Set progress tick
+          utils::flush.console()
+        }
+
+        model <- with_seed(seed + i - 1, suppressMessages(
+          quiet_brm(
+            formula = formulas[[v]],
+            data = data,
+            family = variable_families[[v]],
+            prior = c(b_shrinkage, intercept_prior),
+            chains = chains,
+            cores = if (identical(cores, "auto")) parallel::detectCores() - 1 else cores,
+            iter = iter,
+            warmup = warmup,
+            thin = thin,
+            algorithm = algorithm,
+            seed = seed,
+            backend = backend,
+            refresh = 0,
+            silent = 2
+          )
+        ))
+
+        preds <- feeder_data |>
+          dplyr::select(
+            dplyr::all_of(all.vars(formulas[[v]])[-1])
+          )
+
+        pp <- brms::posterior_predict(model, newdata = preds)
+        vec <- with_seed(seed + length(variables) + i - 1, sample_posterior_column(
+          pp = pp,
+          template = data[[v]],
+          family = variable_families[[v]]
+        ))
+
         pb$tick()
-        
-        # Return list
-        return_list <- list(
+
+        list(
           model = model,
           value = vec
         )
-        
-        return(return_list)
-        
       }
     ),
     variables
   )
-  
-  # Extract synthetic predicted data
+
   synthetic_data <- purrr::set_names(
-    purrr::map_dfc(
-      brm_models,
-      "value"
-    ),
+    purrr::map_dfc(brm_models, "value"),
     variables
   )
-  
-  # Extract synthetic models
-  synth_models <- purrr::map(
-    brm_models,
-    "model"
-  )
-  
-  # If there are any covariates, append
+
+  synth_models <- purrr::map(brm_models, "model")
+
   if (!is.null(covariates)) {
-    
-    cov_data <- noisy_data[, covariates, drop = FALSE]
-    
     synthetic_data <- cbind(
       synthetic_data,
-      cov_data
+      feeder_data[, covariates, drop = FALSE]
     )
-    
   }
-  
-  # Return list
-  return_list <- list(
+
+  list(
     models = synth_models,
     data = synthetic_data
   )
-  
-  return(return_list)
-  
 }

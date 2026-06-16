@@ -36,8 +36,10 @@ guess_family <- function(y) {
       max_val <- max(y, na.rm = TRUE)
       min_val <- min(y, na.rm = TRUE)
       
-      # Treat small-range integers as ordinal (Likert)
-      if (unique_vals >= 3 && unique_vals <= 7 && min_val == 1) {
+      # Treat small-range bounded integers as ordinal (Likert-style). This
+      # includes two-level observed subsets of a wider ordinal item; otherwise
+      # binary-looking 1/2 variables can be mistaken for count outcomes.
+      if (unique_vals >= 2 && unique_vals <= 7 && min_val == 1 && max_val <= 7) {
         return(brms::cumulative("logit"))
       }
       
@@ -51,7 +53,7 @@ guess_family <- function(y) {
       }
     }
     
-    if (all(y > 0 & y < 1, na.rm = TRUE)) return(beta())
+    if (all(y > 0 & y < 1, na.rm = TRUE)) return(brms::Beta())
     
     return(gaussian())
     

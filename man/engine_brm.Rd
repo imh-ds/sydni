@@ -2,7 +2,7 @@
 % Please edit documentation in R/engine_brm.R
 \name{engine_brm}
 \alias{engine_brm}
-\title{SYDNI Engine: Bayesian Regression Model}
+\title{SYDNI Engine: Bayesian regression models}
 \usage{
 engine_brm(
   data,
@@ -37,234 +37,217 @@ engine_brm(
 \arguments{
 \item{data}{A data frame or tibble.}
 
-\item{variables}{A tidyselect specification indicating which columns in
-\code{data} to synthesize.}
+\item{variables}{Character vector of columns in `data` to synthesize.}
 
-\item{covariates}{A tidyselect specification indicating which columns in
-\code{data} to use as covariates in the synthetic data generation process.}
+\item{covariates}{Character vector of columns in `data` to use as covariates.}
 
-\item{noise_method}{Character. One of "discrete", "truncnormal", "gaussian",
-or "random".
-\describe{
-  \item{\code{discrete}}{
-    For integers or ordered factors, adds noise with possible values
-    -1, 0, or +1, where
-    \eqn{P(\pm1) = \frac{c}{2}, \quad P(0) = 1 - c}.
-    For continuous inputs, adds uniform noise:
-    \eqn{\varepsilon \sim \mathrm{Uniform}(-c \cdot \mathrm{sd}(x),\; c \cdot \mathrm{sd}(x))}.
-  }
-  \item{\code{truncnormal}}{
-    Adds noise from a truncated normal distribution centered at 0:
-    \eqn{\varepsilon \sim \mathrm{TruncNormal}(0, (c \cdot \mathrm{sd}(x))^2,\;
-    [-c \cdot \mathrm{sd}(x),\; c \cdot \mathrm{sd}(x)])}.
-    Rounded to ±1 if input is integer-like.
-  }
-  \item{\code{gaussian}}{
-    Adds noise from a normal distribution:
-    \eqn{\varepsilon \sim \mathcal{N}(0,\; (c \cdot \mathrm{sd}(x))^2)}.
-    Rounded if input is integer-like.
-  }
-  \item{\code{random}}{
-    Adds uniform noise independent of data scale:
-    \eqn{\varepsilon \sim \mathrm{Uniform}(-r,\; r)}.
-  }
-}}
+\item{noise_method}{Character. One of `"discrete"`, `"truncnormal"`,
+`"gaussian"`, or `"random"`.}
 
-\item{c}{A numeric value in (0, 1). Used to scale the standard deviation of
-the noise. Defaults to "auto", in which case it is computed based on either
-\code{p} (for discrete) or \code{f} (for continuous) inputs.}
+\item{c}{A numeric value in `(0, 1)` or `"auto"`.}
 
-\item{round_int}{Logical. If TRUE (default), integer or ordered factor inputs
-are rounded to the nearest whole number after noise is added.}
+\item{round_int}{Logical. If `TRUE`, integer-like inputs are rounded after
+noise injection.}
 
-\item{p}{Numeric. Probability mass to assign to jumps of ±1 in the discrete
-case (used only if \code{c = "auto"}).}
+\item{p}{Numeric. Probability control for discrete noise when `c = "auto"`.}
 
-\item{f}{Numeric. Fraction of standard deviation to approximate when using
-continuous noise (used only if \code{c = "auto"}).}
+\item{f}{Numeric. Variance ratio control for continuous noise when `c =
+"auto"`.}
 
-\item{r}{Numeric. Maximum magnitude of noise when using \code{method =
-"random"}.}
+\item{r}{Numeric. Maximum noise magnitude for `noise_method = "random"`.}
 
-\item{noise_bounds}{Optional numeric vector of length 2. If specified, clamps
-output to these lower and upper bounds. Otherwise, clamps to the range of
-\code{x}.}
+\item{noise_bounds}{Optional numeric vector of length 2 used to clamp
+synthesized values.}
 
-\item{predictor_method}{String. Specifies the method used to determine which
-variables to use in the synthesis engine as predictors. Default is
-\code{random_information}.}
+\item{predictor_method}{String. One of `"random_information"`, `"random"`,
+`"information"`, or `"full"`.}
 
-\item{predictor_k}{Integer. Specifies the number of variables to use in the
-synthesis engine as predictors. Default is \code{NULL}, which automatically
-determines the number.}
+\item{predictor_k}{Integer. Number of synthesized variables to use as
+predictors for each conditional model.}
 
-\item{replace}{Logic. Determines whether to resample with replacement.
-Default is \code{TRUE}.}
+\item{replace}{Logical. Determines whether bootstrap resampling uses
+replacement.}
 
-\item{n_aug}{Numeric. The sample size of the synthetic data to generate.}
+\item{n_aug}{Numeric. Number of synthetic rows to generate.}
 
-\item{families}{A named list of families to use manually, where names
-correspond to column names in \code{data} and values are \code{brmsfamily}
-objects.}
+\item{families}{Optional named list of \pkg{brms} families to use manually.}
 
-\item{base_sd}{Numeric. The base standard deviation for the prior when no
-synthetic data is used. Default is 10.}
+\item{base_sd}{Numeric. Base standard deviation for slope priors.}
 
-\item{sd_scale}{Numeric. Multiplier for the standard deviation of `y` to set
-the prior's spread. A value of 2 approximates a 95% coverage around the
-sample mean. Default is 2.}
+\item{sd_scale}{Numeric. Scale multiplier used to estimate intercept priors.}
 
-\item{k}{Numeric. A scaling exponent controlling the rate of shrinkage.
-Higher values shrink the prior more aggressively as synthetic data
-increases. Default is 2.}
+\item{k}{Numeric. Shrinkage exponent for slope priors.}
 
-\item{chains}{Numeric. Number of Markov chains (Default is 2).}
+\item{chains}{Numeric. Number of Markov chains.}
 
-\item{cores}{Integer. Number of CPU cores to use for parallel computation. By
-default, the number of available cores minus one is used:
-\code{parallel::detectCores() - 1}. For best performance, you may set this
-manually to match your system's capabilities.}
+\item{cores}{Integer or `"auto"`. Number of CPU cores for model fitting.}
 
-\item{iter}{Numeric. Number of iterations per chain, inclusive of warmup.
-Default is 500.}
+\item{iter}{Numeric. Number of iterations per chain.}
 
-\item{warmup}{Integer. Specifies the number of warmup (or burn-in)
-iterations. These iterations are used for step size adaptation and are not
-included in the posterior samples. By default, this is set to
-\code{floor(iter / 2)}.}
+\item{warmup}{Integer. Number of warmup iterations.}
 
-\item{thin}{Integer. Specifies the thinning interval for saving iterations.
-Every \code{thin}-th iteration is retained. Thinning helps reduce memory
-usage and autocorrelation in long chains. Defaults to \code{2}.}
+\item{thin}{Integer. Thinning interval.}
 
-\item{algorithm}{String. Specifies the estimation algorithm to use. Default
-  is \code{"fullrank"}.
+\item{algorithm}{String. `brms` algorithm to use.}
 
-  Available options include:
-  \itemize{
-    \item \code{"fullrank"}: Variational inference with a full-rank multivariate normal approximation.
-    \item \code{"meanfield"}: Variational inference with independent normal distributions (fast but approximate).
-    \item \code{"sampling"}: Full Bayesian inference via Markov chain Monte Carlo (MCMC).
-    \item \code{"pathfinder"}: Quasi-variational inference using optimization-based approximations.
-    \item \code{"laplace"}: Laplace approximation around the posterior mode.
-    \item \code{"fixed_param"}: No inference; generates samples using fixed parameter values (e.g., for simulation).
-  }}
+\item{backend}{Character. One of `"rstan"` or `"cmdstanr"`.}
 
-\item{backend}{Character string specifying which backend to use for fitting
-  the Stan model. Options are \code{"rstan"} (the default) or
-  \code{"cmdstanr"}.
-
-  Although \code{"rstan"} is the default, it is recommended to use
-  \code{"cmdstanr"} for better performance and parallelization. To use
-  \code{cmdstanr}, install the package from GitHub. For more details, see:
-  \url{https://mc-stan.org/cmdstanr/}}
-
-\item{seed}{Numeric. The seed for the random number generation for
-reproducibility. Default is \code{NA}.}
+\item{seed}{Numeric. Seed for reproducibility.}
 }
 \value{
-A named list with the following elements:
-\describe{
-  \item{\code{models}}{A list of model fit objects used to generate the synthetic data.}
-  \item{\code{data}}{A data frame containing the synthetic data generated from the fitted models.}
-}
+A named list with elements `models` and `data`.
 }
 \description{
-Fits a collection of Bayesian regression models with the
-  \code{brms} package and draws posterior-predictive samples to create a
-  fully synthetic data set.  Each target variable is modeled conditionally on
-  a user-chosen subset of other variables and (optionally) external
-  covariates, allowing realistic multivariate dependence. The function
-  supports several noise-injection schemes, adaptive shrinkage priors, and
-  multiple Stan backends as a general engine for the SYDNI framework.
+Fits a collection of Bayesian regression models with \pkg{brms} on the
+observed data and draws posterior-predictive samples for a
+bootstrap-resampled, noise-injected feeder dataset. Each target variable is
+modeled conditionally on a user-chosen subset of other variables and optional
+covariates.
 }
 \details{
-\code{engine_brm()} is a two-stage synthesizer:
+The BRM engine is SYDNI's parametric conditional-model engine. It generates
+synthetic data by fitting one Bayesian regression model per synthesized
+variable on the observed data, then drawing posterior-predictive values for a
+bootstrap-resampled and noise-injected feeder dataset. It is most appropriate
+when the analyst wants explicit conditional relationships among variables and
+wants the fitted models to remain inspectable through \pkg{brms}.
 
-\strong{Perturb the original data.} A bootstrap sample of size
-\eqn{n_{\mathrm{aug}}} is drawn from the input data (with or without
-replacement). Before any modelling, the selected columns are jittered by an
-i.i.d. noise term \eqn{\varepsilon}. This step both widens the support of
-each variable (to allow generative flexibility) and introduces uncertainty.
+Let \eqn{D = \{x_i\}_{i=1}^{n_{\mathrm{obs}}}} be the observed data,
+\eqn{V = \{v_1,\ldots,v_p\}} be the synthesized variables, and
+\eqn{C = \{c_1,\ldots,c_q\}} be optional covariates. The requested synthetic
+sample size is \eqn{n_{\mathrm{aug}}}.
 
-The noise distribution depends on the variable type (continuous vs.
-integer-like) and the \code{noise_method}:
+The engine proceeds in six steps:
 
-    \itemize{
-      \item \code{"discrete"}:
-        \emph{If} the variable is integer-like, adds noise from
-        \eqn{\varepsilon \in \{-1, 0, +1\}} with
-        \eqn{P(\varepsilon = \pm 1) = c / 2}, \eqn{P(\varepsilon = 0) = 1 - c}.
-        \emph{If} the variable is continuous, instead adds
-        \eqn{\varepsilon \sim \mathrm{Uniform}(-c \cdot \mathrm{sd}(x),\ c \cdot \mathrm{sd}(x))}.
-
-      \item \code{"gaussian"}:
-        Adds Gaussian noise
-        \eqn{\varepsilon \sim \mathcal{N}(0,\ (c \cdot \mathrm{sd}(x))^2)}.
-        Rounded if the input is integer-like.
-
-      \item \code{"truncnormal"}:
-        Adds truncated normal noise
-        \eqn{\varepsilon \sim \mathrm{TruncNormal}(0,\ (c \cdot \mathrm{sd}(x))^2,\ [-c \cdot \mathrm{sd}(x),\ c \cdot \mathrm{sd}(x)])}.
-        Also rounded if the input is integer-like.
-
-      \item \code{"random"}:
-        Adds unscaled uniform noise
-        \eqn{\varepsilon \sim \mathrm{Uniform}(-r,\ r)},
-        independent of the data's standard deviation.
-    }
-
-For all methods, the post-noise value is clamped to either the original or
-user-specified bounds, and optionally rounded (via \code{round_int}) to
-preserve the data's structure.
-
-\strong{Model each target column conditionally on others.} For each variable
-\eqn{y_m} listed in \code{variables}, a subset of predictors \eqn{z_m} is
-selected:
-
-    \itemize{
-      \item \code{"full"}: all other variables
-      \item \code{"random"}: a random subset of size \code{predictor_k}
-      \item \code{"information"}: top \eqn{k} variables ranked by mutual information with \eqn{y_m}
-      \item \code{"random_information"}: random draw from the top \eqn{5k} informative variables
-    }
-
-Any covariates passed via \code{covariates} are also included in the model.
-
-Each \eqn{y_m} is modelled with a Bayesian regression of the form:
-
+\enumerate{
+  \item Draw a feeder sample \eqn{\tilde{D}} of size
+    \eqn{n_{\mathrm{aug}}} from \eqn{D} using \code{dplyr::slice_sample()}:
     \deqn{
-      \eta_m = \beta_{0m} + z_m^T \beta_m
+      \tilde{D} = \{x_{s_i}: s_i \sim
+      \mathrm{Uniform}(\{1,\ldots,n_{\mathrm{obs}}\})\}_{i=1}^{n_{\mathrm{aug}}}.
+    }
+    If \code{replace = FALSE}, the indices are sampled without replacement.
+
+  \item Inject noise into the synthesized columns of \eqn{\tilde{D}} to form
+    the feeder data \eqn{\tilde{D}_{\varepsilon}}. Covariates are not
+    perturbed. For a synthesized column \eqn{x}, the noisy value is
+    \deqn{
+      x_i^{\varepsilon} =
+      \mathrm{clip}(x_i + \varepsilon_i,\; L_x,\; U_x),
+    }
+    where \eqn{[L_x,U_x]} is either \code{noise_bounds} or the observed range
+    of \eqn{x}. Integer-like, factor, and ordered-factor columns are rounded
+    and reconstructed after perturbation when \code{round_int = TRUE}.
+    Four noise methods are available through \code{noise_method}:
+    \code{"discrete"}, \code{"gaussian"}, \code{"truncnormal"}, and
+    \code{"random"}. The method-specific distributions, automatic scaling
+    rules for \code{c}, and type reconstruction details are implemented in
+    \code{\link[=inject_noise]{inject_noise()}} and applied column-wise by
+    \code{\link[=add_noise]{add_noise()}}.
+
+  \item For each target variable \eqn{v_m \in V}, choose a predictor set
+    \eqn{Z_m \subseteq V \setminus \{v_m\}} using
+    \code{predictor_method}. \code{"full"} uses all remaining synthesized
+    variables. \code{"random"} samples \code{predictor_k} of them uniformly.
+    \code{"information"} ranks candidates by normalized mutual information
+    and takes the top \code{predictor_k}. \code{"random_information"} ranks
+    candidates by normalized mutual information, keeps the top
+    \eqn{5 k_{\mathrm{pred}}}, and samples \eqn{k_{\mathrm{pred}}} from
+    that short list, where \eqn{k_{\mathrm{pred}}} is \code{predictor_k}.
+
+    The normalized mutual information score used for ranking is
+    \deqn{
+      \mathrm{NMI}(X,Y) =
+      \frac{I(X;Y)}{\max\{H(X),H(Y)\}},
+    }
+    where \eqn{I(X;Y)} is mutual information and \eqn{H(\cdot)} is entropy.
+    Numeric variables with many unique values are discretized into quantile
+    bins before scoring. The final right-hand side for target \eqn{v_m} is
+    \eqn{Z_m \cup C}; if this set is empty, the model is intercept-only:
+    \deqn{
+      v_m \sim 1.
     }
 
-The outcome distribution is chosen by \code{brms} based on variable type (or
-manually via \code{families}).
+  \item Assign a \pkg{brms} family \eqn{F_m} to each target. If
+    \code{families} supplies a named family for \eqn{v_m}, that family is
+    used. Otherwise, SYDNI chooses a family from the observed target type:
+    binary factors use Bernoulli logit models, ordered factors and
+    Likert-like integers use cumulative logit models, unordered factors use
+    categorical logit models, non-negative integer counts use Poisson or
+    negative-binomial models, proportions in \eqn{(0,1)} use beta models,
+    and other numeric variables use Gaussian models.
 
-\strong{Adaptive shrinkage prior:}  
-Each regression coefficient \eqn{\beta_{jm}} is given a normal prior whose
-standard deviation shrinks based on the relative size of the synthetic sample.
-Specifically, the prior is defined as:
+  \item Fit one conditional Bayesian regression model on the observed data
+    for each target. In generic form, the linear predictor is
+    \deqn{
+      \eta_{im} = \alpha_m + z_{im}^{\top}\beta_m +
+      c_i^{\top}\gamma_m,
+    }
+    with outcome model
+    \deqn{
+      v_{im} \mid z_{im}, c_i, \theta_m \sim F_m(\eta_{im}, \phi_m),
+    }
+    where \eqn{\theta_m} denotes all fitted parameters for target
+    \eqn{v_m}; \eqn{\phi_m} denotes any family-specific auxiliary parameter
+    such as residual scale, shape, or overdispersion.
 
-\deqn{
-  \beta_{jm} \sim \mathcal{N}(0,\ \sigma_\beta^2), \quad
-  \sigma_\beta = \frac{\mathrm{base\_sd}}{(1 + \frac{n_{\mathrm{syn}}}{n_{\mathrm{obs}}})^k}
+    Slope priors are shrunk as the requested augmentation grows:
+    \deqn{
+      \beta_{jm}, \gamma_{\ell m} \sim
+      \mathcal{N}(0,\; \sigma_{\beta}^{2}),
+      \qquad
+      \sigma_{\beta} =
+      \frac{\mathrm{base\_sd}}
+      {\left(1 + n_{\mathrm{aug}} / n_{\mathrm{obs}}\right)^k}.
+    }
+    Larger values of \code{k} make the conditional models more conservative
+    as the synthetic sample size grows. This shrinkage is intended to
+    discourage synthetic augmentation from behaving like naive sample-size
+    inflation.
+
+    The intercept prior is estimated from the observed target distribution:
+    \deqn{
+      \alpha_m \sim
+      \mathcal{N}(\bar{v}_m,\; (s_m\,\mathrm{sd\_scale})^2),
+    }
+    where \eqn{\bar{v}_m} and \eqn{s_m} are the observed mean and standard
+    deviation of target \eqn{v_m}. These priors are passed to \pkg{brms} as
+    class \code{"b"} and class \code{"Intercept"} priors.
+
+  \item Generate synthetic target values from the posterior predictive
+    distribution using the noisy feeder rows as \code{newdata}. For feeder
+    row \eqn{i} and target \eqn{v_m},
+    \deqn{
+      v_{im}^{\star} \sim
+      p(v_m \mid z_{im}^{\varepsilon}, c_i, D, F_m).
+    }
+    In implementation, \code{brms::posterior_predict()} returns a matrix
+    \eqn{P_m} with posterior draws in rows and feeder observations in
+    columns. SYDNI samples one posterior row independently for each feeder
+    observation:
+    \deqn{
+      v_{im}^{\star} = P_m[r_i, i],
+      \qquad
+      r_i \sim \mathrm{Uniform}(\{1,\ldots,R_m\}),
+    }
+    where \eqn{R_m} is the number of retained posterior predictive draws.
+    The resulting vector is reconstructed to match the observed target:
+    factors are mapped back to valid levels, integer-like outcomes are
+    rounded and clamped to the observed range, and continuous numeric
+    outcomes are clamped to the observed range.
 }
 
-where \eqn{n_{\mathrm{obs}}} is the number of original (observed) data points,
-\eqn{n_{\mathrm{syn}}} is the number of synthetic records, and \eqn{k} is a
-scaling exponent controlling how aggressively the prior tightens.
+The final synthetic dataset is assembled column-wise as
+\deqn{
+  D^{\star} =
+  \left[v_1^{\star},\ldots,v_p^{\star}, C_{\mathrm{feeder}}\right],
+}
+where \eqn{C_{\mathrm{feeder}}} is included only when \code{covariates} are
+supplied. The returned \code{models} element contains the fitted \pkg{brms}
+model for each synthesized target, and the returned \code{data} element
+contains \eqn{D^{\star}}.
 
-As \eqn{n_{\mathrm{syn}}} increases relative to \eqn{n_{\mathrm{obs}}},
-the prior variance shrinks, discouraging the model from overfitting
-synthetic noise. This helps maintain stability during iterative generation
-or large-scale synthesis.
-
-\strong{Posterior prediction:} From each fitted model \eqn{\mathcal{M}_m}, a
-posterior-predictive draw is made for each row in the noisy data:
-
-    \deqn{
-      \hat{y}_m^{(i)} \sim p(y_m \mid z_m^{(i)},\ \mathcal{M}_m), \quad i = 1, \dots, n_{\mathrm{aug}}
-    }
-
-These predicted values constitute the synthetic version of \eqn{y_m}.
+The BRM engine should be interpreted as a robustness and sensitivity-analysis
+engine. It does not make synthetic rows into additional empirical evidence,
+and it does not provide disclosure protection on its own.
 }

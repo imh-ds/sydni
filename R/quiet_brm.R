@@ -23,19 +23,5 @@
 #'
 #' @keywords internal
 quiet_brm <- function(...) {
-  
-  # Suppress both messages (warnings, progress) and standard output (compilation info)
-  invisible(
-    capture.output(
-      capture.output(
-        fit <- brms::brm(...),  # Fit the model
-        type = "message"        # First capture messages (stderr)
-      ),
-      type = "output"           # Then capture standard output (stdout)
-    )
-  )
-  
-  # Return the fitted model object
-  fit
-  
+  suppressMessages(brms::brm(...))
 }

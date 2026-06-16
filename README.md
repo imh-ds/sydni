@@ -1,233 +1,347 @@
 ---
-editor_options: 
-  markdown: 
+editor_options:
+  markdown:
     wrap: 72
 ---
 
 # sydni
 
-`sydni` is an R package for running *SYDNI: Synthetic Data Augmentation
-through Noise Inference*. SYDNI is a framework for generating "muted
-look-alike" synthetic datasets by fitting a model to the observed data
-with controlled noise-supported shrinkage. Its goal is to support
-robustness and sensitivity checks, particularly in small or imbalanced
-samples, while guarding against inflated Type I error rates (false
-positives).
+`sydni` is an R package for **synthetic data augmentation with
+noise-informed shrinkage**. It is designed for **robustness and
+sensitivity checks** in settings where analyses may be affected by small
+samples, subgroup imbalance, or modest perturbations of observed
+structure.
 
-## Use-case
+## Scope and intended use
 
-Sample size limitations are common in behavioral and business sciences
-for various reasons, including (but not limited to):
+The package is intended to support:
 
--   High costs (e.g., participant compensation, recruitment)
+- A tool for generating perturbed synthetic datasets from an observed
+  sample
+- Sensitivity analyses for evaluating whether downstream conclusions are
+  affected by sampling noise and distributional assumptions
+- Five synthesis engines: conditional Bayesian regression, Gaussian
+  copula with empirical margins, nonlinear BART, latent-factor synthesis,
+  and sparse graphical synthesis
 
--   Natural imbalances (e.g., gender ratios in human subject pools)
+The package should not be interpreted as:
 
--   Niche or underrepresented populations (e.g., rare diseases)
-
-These constraints limit researchers' ability to generalize findings or
-run analyses that require large or balanced datasets (e.g., clustering,
-latent models). Such limitations more commonly disproportionately affect
-researchers from underfunded institutions or marginalized communities
-who lack the resources to overcome the practical obstacles.
-
-**SYDNI provides a principled way to augment data** using noisy
-synthetic samples that:
-
--   Mimic observed structure without overfitting idiosyncrasies
-
--   Penalize spurious signal
-
--   Allow for more confident robustness and sensitivity analyses
-
-This makes SYDNI especially useful when working with small samples,
-biased groups, or constrained study designs.
+- A standalone guarantee of privacy or disclosure protection
+- A general solution for recovering population truth from undersized
+  samples
+- A substitute for domain-specific validation of synthetic data quality
 
 ## Installation
 
 Install `sydni` from GitHub with:
 
-``` r
+```r
 # install.packages("remotes")
 remotes::install_github("imh-ds/sydni")
 ```
 
-For optimal performance using `cmdstanr` as the backend instead of
-`rstan`, you may also need to install `cmdstanr` (for details, see the
-CmdStanR website: <https://mc-stan.org/cmdstanr/>):
+If you want to use the Bayesian regression engine with the `cmdstanr`
+backend:
 
-``` r
+```r
 remotes::install_github("stan-dev/cmdstanr")
-
-# Ensure CmdStan is also installed
 cmdstanr::install_cmdstan()
 ```
 
-## Quick Start
+Depending on your local Stan and `brms` setup, the BRM engine may also
+need compiled dependencies that are installed transitively through
+`brms` / `rstan`. If BRM setup does not complete automatically on your
+machine, common missing packages include:
 
-### Engines
+```r
+install.packages(c("BH", "RcppEigen"))
+```
 
-`sydni` currently supports two 'engines' to generate synthetic data:
+These are not direct `sydni` dependencies, but they are sometimes needed
+to finish configuring the BRM toolchain on Windows or on fresh R
+installations.
 
--   **Bayesian Regression Models (BRM):** Fits a BRM to the observed
-    data and applies shrinkage via priors. A noisy resampled dataset is
-    used as the 'feeder' data into generating the synthetic data.
+Additional engine package requirements:
 
--   **Psychometric Copula:** Fits a copula to the noisy data with a
-    shrunken correlation matrix.
+```r
+install.packages(c("dbarts", "psych", "huge"))
+```
 
-### Generating Synthetic Data
+- `dbarts` is required for `engine = "bart"`
+- `psych` is required for `engine = "factor"`
+- `huge` is required for `engine = "graphical"`
 
-To generate synthetic data, specify:
+## Engines
 
--   `data`: The observed data to fit the model to
+### Bayesian regression (`engine = "brm"`)
 
--   `variables`: The variables to synthesize
+- Builds a noisy bootstrap feeder dataset
+- Fits one conditional Bayesian model per synthesized variable on that
+  feeder dataset
+- Uses shrinkage priors that tighten as the synthetic sample grows
+- Best when conditional structure matters and you want model-based
+  synthesis
+- Provides the most explicit regression-based representation of
+  conditional relationships, with support for mixed outcomes and
+  interpretable model structure
 
--   `n_aug`: The sample size of the desired synthetic dataset
+### Gaussian copula (`engine = "copula"`)
 
--   `engine`: The model to synthesize data
+- Builds a noisy feeder dataset within covariate-defined groups
+- Estimates subgroup copulas with shrinkage toward a global correlation
+  target
+- Reconstructs each margin empirically instead of assuming normal output
+- Best when dependence preservation is more important than a fully
+  specified regression model for each variable
+- Emphasizes broad joint dependence structure without fitting a separate
+  conditional model for each synthesized variable
 
-``` r
-library(tidyverse)
+### Bayesian additive regression trees (`engine = "bart"`)
 
-# Get the observed dataset
-grit <- data(grit) |>
+- Builds a noisy bootstrap feeder dataset
+- Fits one regularized BART model per synthesized variable
+- Handles covariates natively like the BRM engine
+- Treats ordinal-like synthesized targets through a numeric approximation
+  path and reconstructs them back to the observed support with a warning
+- Best when you need nonlinear conditional structure
+- Extends the conditional-modeling approach to nonlinear relationships
+  and interactions
+
+### Latent factor (`engine = "factor"`)
+
+- Builds noisy feeder data within covariate-defined groups
+- Fits subgroup factor models for ordinal or integer-like item batteries
+- Shrinks factor loadings as augmentation grows
+- Best for psychometric indicators and latent-structure robustness checks
+- Models latent psychometric structure directly, rather than relying only
+  on observed-variable associations
+
+### Sparse graphical (`engine = "graphical"`)
+
+- Builds noisy feeder data within covariate-defined groups
+- Fits sparse Gaussian graphical models in a latent Gaussian space
+- Reconstructs each margin empirically
+- Best when direct conditional-dependence structure is the scientific
+  target
+- Targets sparse direct-dependence structure rather than dense association
+  or latent-factor structure
+
+## Choosing an engine
+
+Use `engine = "brm"` when:
+
+- you want a general-purpose model-based engine
+- outcomes are mixed or include ordinal variables that should be handled
+  more explicitly than BART's approximation path
+- interpretability of conditional structure matters
+
+Use `engine = "copula"` when:
+
+- your main goal is preserving overall dependence structure
+- subgroup-aware joint synthesis matters more than explicit regression
+  formulas
+- you want a relatively assumption-light engine compared with BRM
+
+Use `engine = "bart"` when:
+
+- you suspect important nonlinearities or interactions
+- a flexible conditional model is preferred while retaining native
+  covariate conditioning
+- your outcomes are mostly continuous or binary, or ordinal variables
+  are acceptable under an approximation path
+- you want tree-based conditional synthesis without switching to a
+  dependence-first engine
+
+Use `engine = "factor"` when:
+
+- the synthesized variables are psychometric items or item batteries
+- the scientific target is latent structure rather than only observed
+  correlations
+- you want a robustness check tied to common-factor style structure
+- you are working in a measurement setting where latent constructs are a
+  more natural model than direct observed-variable links
+
+Use `engine = "graphical"` when:
+
+- the scientific target is direct conditional dependence
+- you care about network-like or sparse structure among variables
+- a sparse dependency model is preferred to a dense copula correlation
+  model
+- you want to preserve a sparse dependency skeleton rather than a full
+  dense association pattern
+
+## Engine tradeoffs
+
+- `brm` and `bart` are conditional engines. Both model each target from
+  the others and handle covariates natively; `brm` emphasizes explicit
+  regression structure, whereas `bart` emphasizes nonlinear relationships
+  and interactions.
+- `copula` and `graphical` are dependence-oriented engines. Both focus on
+  joint structure and use subgrouping when covariates are supplied;
+  `copula` targets broad association patterns, whereas `graphical`
+  targets sparse direct-dependence structure.
+- `factor` is the most domain-specific engine. It is intended for item
+  batteries and latent constructs, where common-factor structure is more
+  central than either regression-based conditioning or dense observed
+  correlations.
+
+## Quick start
+
+```r
+library(dplyr)
+library(sydni)
+
+data(grit, package = "sydni")
+
+grit_complete <- grit |>
   filter(if_all(everything(), ~ !is.na(.)))
 
-# Run SYDNI
-brm_data <- sydni(
-  data = grit,
-  variables = c(sprintf("o%01d", seq(10)),
-                sprintf("e%01d", seq(10))),
-  n_aug = 100,
-  engine = "brm"
-)
-```
-
-### Generating Synthetic Data with Covariates
-
-If there are any covariates that should be taken into consideration when
-generating synthetic data, these can be specified using the `covariates`
-argument within the `sydni()` function, like so:
-
-``` r
-# Run SYDNI with covariates
-brm_data <- sydni(
-  data = grit,
-  variables = c(sprintf("o%01d", seq(10)),
-                sprintf("e%01d", seq(10))),
+result <- sydni(
+  data = grit_complete,
+  variables = c(sprintf("o%01d", seq(10)), sprintf("e%01d", seq(10))),
   covariates = c("gs1", "gs2"),
   n_aug = 100,
-  engine = "copula"
+  engine = "copula",
+  seed = 123
 )
+
+head(result$data)
 ```
 
-Covariates do not have any noise added during the synthetic data
-generation process and are only resampled from the observed data. These
-covariates are appended to the synthetic data and returned with them in
-the final output. This is particularly important in cases where
-covariates are categorical, such as gender or group membership, where
-noise injection can fundamentally change meaningful data
-characteristics.
+The returned object has three components:
 
-### Adjusting Noise Injection
+- `models`: fitted model objects or engine-specific model summaries
+- `data`: the synthetic dataset
+- `meta`: lightweight metadata with generation settings and an input
+  summary, not the full original dataset
 
-To mitigate overfitting to idiosyncratic dependence patterns in small
-samples, SYDNI injects controlled noise into the resampled observed data
-before fitting the model. This aims to help the synthetic data
-generalize better and reflect uncertainty. You can control the amount
-and type of noise using the arguments below:
+## Noise controls
 
--   `method`: One of `"discrete"`, `"truncnormal"`, `"gaussian"`, or
-    `"random"` determines the shape of the noise distribution.
+SYDNI perturbs the feeder data before fitting or sampling.
 
--   `c`: Controls the scale of the noise relative to the standard
-    deviation of the variable. Used in most noise types. If `"auto"`
-    (default), it’s computed based on either p or f below.
+- `noise_method = "discrete"`:
+  for integer-like data, adds `-1`, `0`, or `+1`; for continuous data,
+  adds uniform noise scaled by the variable SD
+- `noise_method = "gaussian"`:
+  adds Gaussian noise scaled by the variable SD
+- `noise_method = "truncnormal"`:
+  adds truncated Gaussian noise scaled by the variable SD
+- `noise_method = "random"`:
+  adds uniform noise in `[-r, r]`
 
--   `p`: For `"discrete"` noise, controls the probability that a value
-    changes by ±1. Higher values of `p` result in more perturbation.
-    Only used when `c = "auto"`.
+Key tuning parameters:
 
--   `f`: For continuous noise (e.g., `"gaussian"`, `"truncnormal"`),
-    this sets the target ratio of noise variance to data variance. For
-    example, `f = 0.25` injects noise with one-quarter the variance of
-    the original variable. Only used when `c = "auto"`.
+- `p`: target probability of a non-zero discrete perturbation when
+  `c = "auto"`
+- `f`: target variance ratio for continuous noise when `c = "auto"`
+- `r`: direct scale for `noise_method = "random"`
+- `noise_bounds`: optional lower/upper clamps for feeder values
 
--   `r`: When using `method = "random"`, this sets the maximum noise
-    magnitude added (drawn from `Uniform(-r, r)`), independent of the
-    data’s scale.
+Examples:
 
-Inject mild discrete noise:
-
-``` r
-sydni(..., engine = "copula", method = "discrete", p = 0.2)
+```r
+sydni(..., engine = "copula", noise_method = "discrete", p = 0.2)
+sydni(..., engine = "copula", noise_method = "gaussian", f = 0.25)
+sydni(..., engine = "copula", noise_method = "truncnormal", c = 0.1)
+sydni(..., engine = "copula", noise_method = "random", r = 1)
 ```
 
-Use more aggressive continuous noise:
+## BRM shrinkage controls
 
-``` r
-sydni(..., engine = "copula", method = "gaussian", f = 0.5) 
+For `engine = "brm"`, slope priors shrink according to:
+
+```r
+base_sd / (1 + n_syn / n_obs)^k
 ```
 
-Disable auto-scaling and specify exact scale:
+- Higher `k` means more aggressive shrinkage as synthetic sample size
+  increases
+- Lower `base_sd` means tighter priors overall
+- `sd_scale` controls the intercept prior width relative to the observed
+  outcome SD
 
-``` r
-sydni(..., engine = "copula", method = "truncnormal", c = 0.1) 
+Example:
+
+```r
+sydni(..., engine = "brm", k = 3, base_sd = 5)
 ```
 
-Add unscaled uniform noise:
+BRM-specific practical notes:
 
-``` r
-sydni(..., engine = "copula", method = "random", r = 1)
-```
+- `backend = "cmdstanr"` is generally more stable than `backend =
+  "rstan"`, especially on Windows.
+- The first BRM run can take much longer than later runs because Stan
+  model compilation is cached.
+- Fast approximate algorithms such as `"meanfield"` may emit warnings
+  about unreliable resampling. These warnings usually reflect limitations
+  of the approximation rather than an implementation error.
 
-### Adjusting Shrinkage Magnitude (for BRM only)
+## High-risk use cases
 
-When running SYDNI with `engine = "brm"`, the effect size estimates are
-regularized by placing normal priors centered at 0 on all regression
-coefficients. The amount of shrinkage is controlled by two key
-arguments: `k` and `base_sd`.
+Use extra caution when:
 
--   `base_sd` controls the starting width of the prior when no synthetic
-    data is used.
+- subgroup cells are extremely small
+- variables are heavily multimodal or structurally bounded
+- ordinal Likert data are interpreted as fully metric without checking
+  the output
+- covariate imbalance is severe
+- privacy or disclosure protection is a primary goal
 
--   `k` controls how aggressively the prior contracts as more synthetic
-    data is introduced.
+## Validation guidance
 
-The prior standard deviation is computed as:
+SYDNI output should be validated before interpretation. At minimum,
+compare:
 
-``` r
-SD = base_sd / (1 + n_syn / n_obs)^k
-```
+- marginal distributions
+- subgroup proportions
+- correlations or dependence structure
+- downstream model conclusions
 
-This means:
+## Interpretation and reporting guidelines
 
--   Higher values of `k` leads to more aggressive shrinkage as synthetic
-    data increases.
+SYDNI should be interpreted as a **secondary robustness framework**, not
+as additional empirical evidence. The augmented data are generated from
+the observed sample and are meant to test whether conclusions appear
+stable under cautious, structure-preserving perturbation.
 
--   Lower values of `k` (e.g., 0.5–1) leads to more conservative, slower
-    shrinkage.
+Recommended interpretation rules:
 
--   Higher `base_sd` allows more flexibility; lower values pull
-    estimates tighter around zero.
+- Treat the original-sample analysis as primary.
+- Treat SYDNI analyses as secondary sensitivity or robustness analyses.
+- If an effect is present in both the original and augmented analyses,
+  that is more reassuring than either analysis alone.
+- If an effect is absent in the original data but appears only after
+  augmentation, interpret the augmented result as fragile or suggestive,
+  not confirmatory.
+- Do not present augmentation-only significance as evidence of a latent
+  effect that the original data failed to show.
 
-``` r
-# More aggressive shrinkage (e.g., discourage spurious effects)
-sydni(..., engine = "brm", k = 3)
+Recommended reporting practices:
 
-# More permissive shrinkage (e.g., allow moderate effects to survive)
-sydni(..., engine = "brm", k = 0.5)
-```
+- Report the raw-data analysis first.
+- Report the SYDNI analysis alongside it, not in place of it.
+- Report the full SYDNI settings used:
+  `engine`, `n_aug`, `noise_method`, `p`/`f`/`c`, `predictor_method`,
+  `predictor_k`, `base_sd`, `k`, `algorithm`, `backend`, and `seed`.
+- Report whether conclusions are stable across reasonable alternative
+  SYDNI settings rather than emphasizing a single favorable run.
+- Describe SYDNI as a robustness or sensitivity procedure, not as a way
+  to increase evidential sample size.
 
-You can also raise or lower `base_sd` to control the overall scale of
-prior uncertainty. For example, setting `base_sd = 5` will produce
-tighter priors than the default of 10, even when `k = 1`.
+Suggested paper language:
+
+> SYDNI results were used as a secondary robustness analysis alongside
+> the original-sample results. Synthetic augmentation was not treated as
+> additional empirical evidence, and effects that appeared only after
+> augmentation were interpreted cautiously.
+
+The package now includes a starter benchmark framework under
+`inst/benchmarks/` and a methodology vignette under `vignettes/`.
 
 ## Citation
 
 If you use `sydni` in published work, please cite:
 
-> Im, H. (2025). sydni: Synthetic Data Augmentation through Noise
-> Inference. GitHub repository. <https://github.com/imh-ds/sydni>.
+> Im, H. (2025). *sydni: Synthetic data augmentation with
+> noise-informed shrinkage*. GitHub repository.
+> <https://github.com/imh-ds/sydni>

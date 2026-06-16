@@ -86,7 +86,7 @@ add_noise <- function(
             round_int = round_int,
             p = p,
             f = f,
-            r = 1,
+            r = r,
             bounds = bounds
           )
         }

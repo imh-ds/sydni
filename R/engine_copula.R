@@ -1,185 +1,177 @@
-#' SYDNI Engine: Psychometric Copula
+#' SYDNI Engine: Gaussian copula with empirical margins
 #'
-#' @description Fits a Gaussian copula to the empirical correlation structure of
-#'   the data (with optional covariate stratification), draws from that copula,
-#'   and back-transforms the margins to match each variable’s observed mean and
-#'   standard deviation.  Noise is added up-front to decouple the synthetic
-#'   sample from individual records, and subgroup-specific correlation matrices
-#'   are \emph{shrunk} toward a global target to remain stable even when
-#'   covariate cells are small.  The result is a fully synthetic data set that
-#'   respects both marginal distributions and multivariate dependence.
+#' @description
+#' Fits a Gaussian copula to the dependence structure of the data, optionally
+#' within covariate-defined subgroups, and reconstructs each synthesized margin
+#' empirically rather than assuming normal marginals. Noise is added to a
+#' bootstrap feeder sample before the subgroup copulas are estimated.
 #'
 #' @details
+#' The copula engine is SYDNI's dense dependence-preservation engine. It models
+#' joint association among synthesized variables through subgroup-specific
+#' Gaussian copulas, while reconstructing each output variable through empirical
+#' margins rather than assuming normally distributed synthetic values.
 #'
-#' \code{engine_copula()} is a three-stage synthesizer:
+#' Let \eqn{D = \{x_i\}_{i=1}^{n_{\mathrm{obs}}}} be the observed data,
+#' \eqn{V = \{v_1,\ldots,v_{p_V}\}} be the synthesized variables, and
+#' \eqn{C = \{c_1,\ldots,c_q\}} be optional covariates. The requested synthetic
+#' sample size is \eqn{n_{\mathrm{aug}}}. If \code{covariates} are supplied,
+#' each unique covariate combination defines a subgroup:
+#' \deqn{
+#'   g_i = \mathrm{interaction}(c_{i1},\ldots,c_{iq}).
+#' }
+#' If no covariates are supplied, all rows belong to a single group.
 #'
-#' \strong{Perturb the original data.} A bootstrap sample of size
-#' \eqn{n_{\mathrm{aug}}} is drawn from the input data (with or without
-#' replacement). Before any modelling, the selected columns are jittered by an
-#' i.i.d. noise term \eqn{\varepsilon}. This step both widens the support of
-#' each variable (to allow generative flexibility) and introduces uncertainty.
+#' The engine proceeds in seven steps:
 #'
-#' The noise distribution depends on the variable type (continuous vs.
-#' integer-like) and the \code{noise_method}:
-#'
-#'     \itemize{
-#'       \item \code{"discrete"}:
-#'         \emph{If} the variable is integer-like, adds noise from
-#'         \eqn{\varepsilon \in \{-1, 0, +1\}} with
-#'         \eqn{P(\varepsilon = \pm 1) = c / 2}, \eqn{P(\varepsilon = 0) = 1 - c}.
-#'         \emph{If} the variable is continuous, instead adds
-#'         \eqn{\varepsilon \sim \mathrm{Uniform}(-c \cdot \mathrm{sd}(x),\ c \cdot \mathrm{sd}(x))}.
-#'
-#'       \item \code{"gaussian"}:
-#'         Adds Gaussian noise
-#'         \eqn{\varepsilon \sim \mathcal{N}(0,\ (c \cdot \mathrm{sd}(x))^2)}.
-#'         Rounded if the input is integer-like.
-#'
-#'       \item \code{"truncnormal"}:
-#'         Adds truncated normal noise
-#'         \eqn{\varepsilon \sim \mathrm{TruncNormal}(0,\ (c \cdot \mathrm{sd}(x))^2,\ [-c \cdot \mathrm{sd}(x),\ c \cdot \mathrm{sd}(x)])}.
-#'         Also rounded if the input is integer-like.
-#'
-#'       \item \code{"random"}:
-#'         Adds unscaled uniform noise
-#'         \eqn{\varepsilon \sim \mathrm{Uniform}(-r,\ r)},
-#'         independent of the data's standard deviation.
+#' \enumerate{
+#'   \item Estimate a global shrinkage correlation matrix from the observed
+#'     synthesized variables:
+#'     \deqn{
+#'       R_{\mathrm{global}} =
+#'       \mathrm{cor.shrink}(D[V]).
 #'     }
+#'     This matrix is used as a stable dependence target for small subgroups.
 #'
-#' For all methods, the post-noise value is clamped to either the original or
-#' user-specified bounds, and optionally rounded (via \code{round_int}) to
-#' preserve the data's structure.
-#' 
-#' \strong{Fit a copula model within each covariate-defined subgroup.}  
-#' If \code{covariates} are provided, a grouping variable is constructed by
-#' crossing their levels. Each unique covariate combination defines a group
-#' \eqn{g \in G}, and a separate copula model is fit for each group.
+#'   \item For each subgroup \eqn{g}, compute its observed size
+#'     \eqn{n_g}, observed proportion \eqn{\pi_g = n_g / n_{\mathrm{obs}}},
+#'     preliminary noisy allocation
+#'     \eqn{a_g = \lceil \pi_g n_{\mathrm{aug}} \rceil}, and noisy feeder
+#'     target size
+#'     \deqn{
+#'       n_g^{\mathrm{target}} =
+#'       \max\left(
+#'         a_g,\;
+#'         m_{\mathrm{feed}} p_V
+#'       \right).
+#'     }
+#'     Here \eqn{m_{\mathrm{feed}}} is
+#'     \code{engine_control$feeder_min_multiplier}, with default 10. The number
+#'     of noisy feeder rows is
+#'     \deqn{
+#'       n_g^{\mathrm{syn}} =
+#'       \begin{cases}
+#'       a_g, & n_g \ge n_g^{\mathrm{target}},\\
+#'       n_g^{\mathrm{target}} - n_g, & n_g < n_g^{\mathrm{target}}.
+#'       \end{cases}
+#'     }
+#'     This restores the original copula-engine philosophy that even
+#'     well-populated cells receive noisy feeder rows, rather than using purely
+#'     observed rows whenever the observed subgroup is already large.
 #'
-#' For each group \eqn{g}, the following procedure is used:
+#'   \item Bootstrap \eqn{n_g^{\mathrm{syn}}} additional rows from each subgroup
+#'     with replacement and inject noise into the synthesized columns only.
+#'     Four noise methods are available through \code{noise_method}:
+#'     \code{"discrete"}, \code{"gaussian"}, \code{"truncnormal"}, and
+#'     \code{"random"}. The method-specific distributions, automatic scaling
+#'     rules for \code{c}, and type reconstruction details are implemented in
+#'     \code{\link[=inject_noise]{inject_noise()}} and applied column-wise by
+#'     \code{\link[=add_noise]{add_noise()}}.
 #'
-#' \itemize{
-#'   \item The empirical correlation matrix \eqn{\mathbf{R}_g} is estimated
-#'         from the observed or perturbed data in that group.
+#'     Feeder construction is controlled by
+#'     \code{engine_control$feeder_include_observed}. When this value is
+#'     \code{NULL}, the engine follows the original behavior:
+#'     with covariates, subgroup feeder data pool observed and noisy rows;
+#'     without covariates, feeder data use the noisy bootstrap rows only. Setting
+#'     \code{feeder_include_observed = TRUE} or \code{FALSE} overrides this
+#'     default.
 #'
-#'   \item To stabilise estimation (especially when groups are small), the
-#'         empirical matrix \eqn{\mathbf{R}_g} is shrunk toward the global
-#'         correlation matrix \eqn{\mathbf{R}_{\mathrm{global}}} using a
-#'         convex combination:
+#'   \item Estimate a raw subgroup correlation matrix from the subgroup feeder
+#'     data:
+#'     \deqn{
+#'       R_g^{\mathrm{raw}} =
+#'       \mathrm{cor.shrink}(D_g^{\mathrm{feed}}[V]).
+#'     }
+#'     If this estimate fails, the implementation falls back to
+#'     \eqn{R_{\mathrm{global}}}. The subgroup matrix is then blended toward
+#'     the global target:
+#'     \deqn{
+#'       R_g^\star =
+#'       \lambda_g R_g^{\mathrm{raw}} +
+#'       (1 - \lambda_g) R_{\mathrm{global}},
+#'       \qquad
+#'       \lambda_g =
+#'       \frac{n_g^{\mathrm{feed}}}
+#'       {n_g^{\mathrm{feed}} + 30}.
+#'     }
+#'     Larger subgroup feeder sizes therefore rely more heavily on the subgroup
+#'     estimate, while smaller subgroup feeder sizes borrow more from the global
+#'     correlation structure.
 #'
-#'         \deqn{
-#'           \mathbf{R}^{\ast}_g =
-#'             \lambda_g \cdot \mathbf{R}_g +
-#'             (1 - \lambda_g) \cdot \mathbf{R}_{\mathrm{global}},
-#'         }
+#'   \item Stabilize \eqn{R_g^\star} before simulation. The implementation
+#'     replaces missing entries with zero, symmetrizes the matrix, sets the
+#'     diagonal to one, floors eigenvalues below a small tolerance, reconstructs
+#'     the matrix, and rescales it back to unit diagonal. This produces a
+#'     positive-definite correlation matrix suitable for Gaussian simulation.
 #'
-#'         where the shrinkage weight \eqn{\lambda_g} depends on the size of
-#'         the group:
+#'   \item Allocate final synthetic output rows across subgroups using the
+#'     original subgroup proportions:
+#'     \deqn{
+#'       n_g^{\star} =
+#'       \mathrm{round}(\pi_g n_{\mathrm{aug}}),
+#'     }
+#'     with any rounding discrepancy added to the largest allocated subgroup so
+#'     that \eqn{\sum_g n_g^{\star} = n_{\mathrm{aug}}}.
 #'
-#'         \deqn{
-#'           \lambda_g = \frac{n_g}{n_g + c},
-#'         }
-#'
-#'         with \eqn{n_g} the number of records in group \eqn{g}, and
-#'         \eqn{c} a shrinkage constant (default 30). Smaller groups receive
-#'         stronger regularisation (\eqn{\lambda_g \rightarrow 0}) and are
-#'         pulled toward the global structure to ensure numerical stability and
-#'         invertibility.
-#'
-#'   \item A Gaussian copula \eqn{C_g} is constructed using the lower triangle
-#'         of \eqn{\mathbf{R}^{\ast}_g}. This copula defines the dependency
-#'         structure across all synthesised variables in the group.
-#'
-#'   \item For each variable \eqn{x_v}, a univariate normal margin
-#'         \eqn{F_{vg} = \mathcal{N}(\mu_{vg},\ \sigma_{vg}^2)} is defined
-#'         using the observed mean and standard deviation in group \eqn{g}.
-#'
-#'   \item The copula and margins are combined into a multivariate
-#'         distribution constructor:
-#'
-#'         \deqn{
-#'           \mathcal{M}_g = \mathrm{mvdc}(C_g,\ \{F_{1g}, \dots, F_{pg}\}),
-#'         }
-#'
-#'         where \eqn{p} is the number of synthesised variables.
+#'   \item For each subgroup, simulate Gaussian copula uniforms by drawing
+#'     \deqn{
+#'       Z_g^\star \sim
+#'       \mathcal{N}(0,\; R_g^\star)
+#'     }
+#'     and transforming component-wise:
+#'     \deqn{
+#'       U_g = \Phi(Z_g^\star).
+#'     }
+#'     For variable \eqn{v}, synthetic values are reconstructed through the
+#'     empirical quantile map of the subgroup feeder margin:
+#'     \deqn{
+#'       x_{iv}^{\star(g)} =
+#'       \left(F_{vg}^{\mathrm{feed}}\right)^{-1}(u_{iv}),
+#'     }
+#'     where \eqn{F_{vg}^{\mathrm{feed}}} is the empirical distribution of
+#'     variable \eqn{v} in \eqn{D_g^{\mathrm{feed}}}. Continuous variables use
+#'     empirical quantiles; integer-like variables use discrete quantiles;
+#'     factors and ordered factors are mapped back to valid levels. Numeric
+#'     outputs are clamped to the observed global range, and integer-like
+#'     outputs are reconstructed to match the original storage type when
+#'     \code{round_int = TRUE}.
 #' }
 #'
-#' \strong{Draw synthetic observations from the copula models.}  
-#' Synthetic records are generated by sampling from each group-specific model
-#' \eqn{\mathcal{M}_g} to reproduce the original group size proportions:
+#' The final synthetic dataset is formed by stacking subgroup outputs. If
+#' \code{covariates} are supplied, each synthetic subgroup block receives the
+#' corresponding covariate values for that subgroup. The returned
+#' \code{models} element stores, for each subgroup, the \pkg{copula}
+#' normal-copula object, the stabilized correlation matrix, and the margin type
+#' \code{"empirical"}.
 #'
-#' \itemize{
-#'   \item For each group \eqn{g}, a synthetic sample of size
-#'         \eqn{n_g^{\ast}} is drawn, where:
-#'
-#'         \deqn{
-#'           \sum_{g \in G} n_g^{\ast} = n_{\mathrm{aug}},
-#'         }
-#'
-#'         and the relative frequencies match the observed group proportions
-#'         in \code{data}.
-#'
-#'   \item The synthetic values are then rescaled to lie within the observed
-#'         min–max range for each variable. If a variable was detected as
-#'         integer-like, values are rounded to the nearest whole number.
-#'
-#'   \item The group-wise samples are concatenated and shuffled to produce a
-#'         final synthetic dataset of \eqn{n_{\mathrm{aug}}} rows.
-#' }
+#' This engine is appropriate when preserving broad joint dependence structure
+#' is more important than fitting a separate conditional model for each target.
+#' It should not be interpreted as a privacy mechanism or as confirmatory
+#' sample-size expansion.
 #'
 #' @param data A data frame or tibble.
-#' @param variables A tidyselect specification indicating which columns in
-#'   \code{data} to synthesize.
-#' @param covariates A tidyselect specification indicating which columns in
-#'   \code{data} to use as covariates in the synthetic data generation process.
-#' @param noise_method Character. One of "discrete", "truncnormal", "gaussian",
-#'   or "random".
-#'   \describe{
-#'     \item{\code{discrete}}{
-#'       For integers or ordered factors, adds noise with possible values
-#'       -1, 0, or +1, where
-#'       \eqn{P(\pm1) = \frac{c}{2}, \quad P(0) = 1 - c}.
-#'       For continuous inputs, adds uniform noise:
-#'       \eqn{\varepsilon \sim \mathrm{Uniform}(-c \cdot \mathrm{sd}(x),\; c \cdot \mathrm{sd}(x))}.
-#'     }
-#'     \item{\code{truncnormal}}{
-#'       Adds noise from a truncated normal distribution centered at 0:
-#'       \eqn{\varepsilon \sim \mathrm{TruncNormal}(0, (c \cdot \mathrm{sd}(x))^2,\;
-#'       [-c \cdot \mathrm{sd}(x),\; c \cdot \mathrm{sd}(x)])}.
-#'       Rounded to ±1 if input is integer-like.
-#'     }
-#'     \item{\code{gaussian}}{
-#'       Adds noise from a normal distribution:
-#'       \eqn{\varepsilon \sim \mathcal{N}(0,\; (c \cdot \mathrm{sd}(x))^2)}.
-#'       Rounded if input is integer-like.
-#'     }
-#'     \item{\code{random}}{
-#'       Adds uniform noise independent of data scale:
-#'       \eqn{\varepsilon \sim \mathrm{Uniform}(-r,\; r)}.
-#'     }
-#'   }
-#' @param c A numeric value in (0, 1). Used to scale the standard deviation of
-#'   the noise. Defaults to "auto", in which case it is computed based on either
-#'   \code{p} (for discrete) or \code{f} (for continuous) inputs.
-#' @param round_int Logical. If TRUE (default), integer or ordered factor inputs
-#'   are rounded to the nearest whole number after noise is added.
-#' @param p Numeric. Probability mass to assign to jumps of ±1 in the discrete
-#'   case (used only if \code{c = "auto"}).
-#' @param r Numeric. Maximum magnitude of noise when using \code{method =
-#'   "random"}.
-#' @param noise_bounds Optional numeric vector of length 2. If specified, clamps
-#'   output to these lower and upper bounds. Otherwise, clamps to the range of
-#'   \code{x}.
-#' @param round_int Logical. If TRUE (default), integer or ordered factor inputs
-#'   are rounded to the nearest whole number after noise is added.
-#' @param n_aug Numeric. The sample size of the synthetic data to generate.
+#' @param variables Character vector of columns in `data` to synthesize.
+#' @param covariates Character vector of columns in `data` to use as covariates.
+#' @param noise_method Character. One of `"discrete"`, `"truncnormal"`,
+#'   `"gaussian"`, or `"random"`.
+#' @param c A numeric value in `(0, 1)` or `"auto"`.
+#' @param round_int Logical. If `TRUE`, integer-like inputs are rounded after
+#'   reconstruction.
+#' @param p Numeric. Probability control for discrete noise when `c = "auto"`.
+#' @param r Numeric. Maximum noise magnitude for `noise_method = "random"`.
+#' @param noise_bounds Optional numeric vector of length 2 used to clamp feeder
+#'   rows before model fitting.
+#' @param n_aug Numeric. Number of synthetic rows to generate.
+#' @param engine_control Optional named list. Supported elements include
+#'   `feeder_min_multiplier`, a positive numeric multiplier for the minimum
+#'   noisy feeder target size per synthesized variable, and
+#'   `feeder_include_observed`, a logical value controlling whether observed
+#'   rows are pooled with noisy feeder rows before estimating subgroup
+#'   correlations. If `feeder_include_observed = NULL`, observed rows are pooled
+#'   only when covariates are supplied, matching the original copula engine.
+#' @param seed Numeric. Seed for reproducibility.
 #'
-#' @return A named list with the following elements:
-#' \describe{
-#'   \item{\code{models}}{A list of model fit objects used to generate the synthetic data.}
-#'   \item{\code{data}}{A data frame containing the synthetic data generated from the fitted models.}
-#' }
-#'
-#' @importFrom rlang :=
+#' @return A named list with elements `models` and `data`.
 #'
 #' @export
 engine_copula <- function(
@@ -192,301 +184,191 @@ engine_copula <- function(
     p = 0.5,
     r = 1,
     noise_bounds = NULL,
-    n_aug = nrow(data)) {
-  
-
-  # MATCH ARGUMENTS ---------------------------------------------------------
-
+    n_aug = nrow(data),
+    engine_control = NULL,
+    seed = NA) {
   noise_method <- match.arg(noise_method)
-  
+  engine_control <- validate_engine_control(engine_control)
+  control <- modifyList(
+    list(
+      feeder_min_multiplier = 10,
+      feeder_include_observed = NULL
+    ),
+    engine_control
+  )
 
-  # FUNCTION ----------------------------------------------------------------
-  
-  # If variables is NULL, then get all variables
-  if(is.null(variables)) {
-    
+  if (
+    !is.numeric(control$feeder_min_multiplier) ||
+      length(control$feeder_min_multiplier) != 1 ||
+      is.na(control$feeder_min_multiplier) ||
+      control$feeder_min_multiplier <= 0
+  ) {
+    stop("`engine_control$feeder_min_multiplier` must be a positive numeric value.")
+  }
+
+  if (
+    !is.null(control$feeder_include_observed) &&
+      (!is.logical(control$feeder_include_observed) ||
+        length(control$feeder_include_observed) != 1 ||
+        is.na(control$feeder_include_observed))
+  ) {
+    stop("`engine_control$feeder_include_observed` must be NULL, TRUE, or FALSE.")
+  }
+
+  if (is.null(variables)) {
     variables <- setdiff(colnames(data), covariates)
-    
   }
-  
-  # If there are covariates, create a group_id for covariate combinations,
-  # otherwise, assign a group_id of 1.
+
   if (!is.null(covariates)) {
-    
-    data$group_id <- interaction(data[, covariates], drop = TRUE)
-    
+    data$group_id <- interaction(data[, covariates], drop = TRUE, lex.order = TRUE)
   } else {
-    
-    data$group_id <- 1
-    
+    data$group_id <- factor("all")
   }
-  
-  # Get unique groups
-  groups <- unique(data$group_id)
-  
-  # Create a global shrunken correlation matrix
-  cor_global <- corpcor::cor.shrink(data[, variables], verbose = FALSE)
-  
-  
-  # Calculate the frequency of covariate combination subgroups
-  proportions <- data |> 
-    
-    # Get frequencies of subgroups
-    dplyr::group_by(group_id) |> 
-    dplyr::count() |> 
-    dplyr::ungroup() |> 
-    
-    # Calculate the proportion relative to the total sample size
-    dplyr::mutate(prop = n / nrow(data))
-  
-  
-  # Calculate synthetic sampling n
-  max_n <- if ((max(proportions$prop) * n_aug) >= (10 * length(variables))) {
-    
-    # If the largest combination subgroup will require more than the minimum n
-    # needed for copula, then assign the largest n
-    ceiling(max(proportions$prop) * n_aug)
-    
-  } else if (max(proportions$n) < 10 * length(variables)) {
-    
-    # If the largest combination subgroup n is less than the minimum n needed for
-    # copula, then assign the minimum copula n
-    10 * length(variables)
-    
-  } else {
-    
-    # Otherwise assign as the largest combination subgroup n
-    max(proportions$n)
-    
-  }
-  
-  
-  # Identify how many synthetic observations are needed in the upsampling step. If
-  # the synthetic sampling is less than or equal to the max n identified, then
-  # assign the user-specificed augmentation n.
-  proportions <- proportions |> 
+
+  groups <- unique(as.character(data$group_id))
+  cor_global <- corpcor::cor.shrink(data[, variables, drop = FALSE], verbose = FALSE)
+
+  proportions <- data |>
+    dplyr::group_by(group_id) |>
+    dplyr::count(name = "n") |>
+    dplyr::ungroup() |>
     dplyr::mutate(
-      syn = ifelse(max_n - n <= 0, n_aug, max_n - n)
+      prop = n / nrow(data),
+      final_n = ceiling(prop * n_aug),
+      target_n = pmax(
+        final_n,
+        ceiling(control$feeder_min_multiplier * length(variables))
+      ),
+      syn = ifelse(n >= target_n, final_n, target_n - n)
     )
-  
-  
-  # Upsample accordingly
-  sampled_data <- purrr::map_dfr(
+
+  sampled_data <- purrr::map2_dfr(
     groups,
-    function(g) {
-      
-      data_g <- data[data$group_id == g, ]
-      val <- proportions$syn[proportions$group_id == g]
-      
-      dplyr::slice_sample(
-        .data = data_g, 
-        n = val, 
+    seq_along(groups),
+    function(g, i) {
+      data_g <- data[data$group_id == g, , drop = FALSE]
+      n_syn_g <- proportions$syn[proportions$group_id == g]
+
+      if (n_syn_g == 0) {
+        return(data_g[0, , drop = FALSE])
+      }
+
+      with_seed(seed + i - 1, dplyr::slice_sample(
+        .data = data_g,
+        n = n_syn_g,
         replace = TRUE
-      )
-      
-    })
-  
-  
-  # Add noise to sampled data
-  noisy_data <- add_noise(
-    data = sampled_data,
-    variables = variables,
-    method = noise_method,
-    c = c,
-    p = p,
-    r = r,
-    round_int = round_int,
-    bounds = noise_bounds
+      ))
+    }
   )
-  
-  
-  # Generate and compute the 'feeder' data. If there are covariates, append the
-  # noisy data to the observed data
-  feed_data <- if (!is.null(covariates)) {
-    
-    rbind(
-      data,
-      noisy_data
+
+  noisy_data <- if (nrow(sampled_data) > 0) {
+    add_noise(
+      data = sampled_data,
+      variables = dplyr::all_of(variables),
+      method = noise_method,
+      c = c,
+      p = p,
+      r = r,
+      round_int = round_int,
+      bounds = noise_bounds
     )
-    
   } else {
-    
+    sampled_data
+  }
+
+  include_observed <- if (is.null(control$feeder_include_observed)) {
+    !is.null(covariates)
+  } else {
+    control$feeder_include_observed
+  }
+
+  feed_data <- if (include_observed && nrow(noisy_data) > 0) {
+    rbind(data, noisy_data)
+  } else if (include_observed) {
+    data
+  } else {
     noisy_data
-    
   }
-  
-  
-  # Generate synthetic data across all groups
-  synth_predict <- setNames(
-    lapply(
-      groups,
-      function(g) {
-        
-        # Filter the full dataset to extract only the rows belonging to the current
-        # subgroup
-        data_g <- feed_data[feed_data$group_id == g, ]
-        
-        # Count the number of observations in the current subgroup
-        n_g <- nrow(data_g)
-        
-        # Compute the shrinkage-based correlation matrix for the subgroup If
-        # estimation fails (e.g., due to singular matrix), fall back to the global
-        # correlation matrix
-        cor_group_raw <- tryCatch(
-          corpcor::cor.shrink(data_g[, variables], verbose = FALSE),
-          error = function(e) cor_global
-        )
-        
-        # Apply shrinkage to blend the subgroup correlation matrix with the global
-        # matrix This stabilizes the correlation structure for small subgroups
-        cor_shrunk <- shrink_cormat(cor_group_raw, cor_global, n_g)
-        
-        
-        # Fit a multivariate normal copula using the lower triangle of the shrunken
-        # correlation matrix. This defines the dependence structure (i.e., how the
-        # variables are correlated).
-        cop <- copula::normalCopula(
-          param = cor_shrunk[lower.tri(cor_shrunk)],
-          dim = length(variables),
-          dispstr = "un"  # Unstructured: all pairwise correlations are estimated
-        )
-        
-        # Define the marginal distributions for each variable (assumed normal here).
-        # Each variable gets a mean and standard deviation from the observed subgroup
-        # data.
-        margins <- lapply(variables, function(v) {
-          list(
-            mean = mean(data_g[[v]], na.rm = TRUE),
-            sd = sd(data_g[[v]], na.rm = TRUE)
-          )
-        })
-        
-        # Combine the copula and the marginal distributions into a multivariate
-        # distribution constructor. This object can now be used to generate synthetic
-        # data that matches both the correlation structure (via the copula) and
-        # marginal distributions (via the means and SDs).
-        mvdc_model <- copula::mvdc(
-          copula = cop,
-          margins = rep("norm", length(variables)),
-          paramMargins = margins
-        )
-        
-        # Generate synthetic data
-        synth_mat <- copula::rMvdc(n_g, mvdc_model)
-        synth_df <- as.data.frame(synth_mat)
-        colnames(synth_df) <- variables
-        
-        # Append covariates (if any)
-        if (!is.null(covariates)) {
-          synth_df[covariates] <- data_g[rep(1, n_g), covariates]
-        }
-        
-        # Return list
-        return_list <- list(
-          model = mvdc_model,
-          df = synth_df
-        )
-        
-        return(return_list)
-        
-      }),
-    groups)
-  
-  
-  # Extract synthetic predicted data
-  synth_data <- purrr::map_dfr(
-    synth_predict,
-    "df"
-  )
-  
-  synth_models <- purrr::map(
-    synth_predict,
-    "model"
-  )
-  
-  # Scale every variable back to original
-  for (v in variables) {
-    
-    # Get min and max values of original variable
-    min_val <- min(data[[v]])
-    max_val <- max(data[[v]])
-    
-    synth_data <- synth_data |> 
-      
-      # Set minimum
-      dplyr::mutate(
-        !!rlang::sym(v) := ifelse(!!rlang::sym(v) < min_val, min_val, !!rlang::sym(v))
-      ) |> 
-      
-      # Set maximum
-      dplyr::mutate(
-        !!rlang::sym(v) := ifelse(!!rlang::sym(v) > max_val, max_val, !!rlang::sym(v))
-      )
-    
-  }
-  
-  
-  # Identify the group_id for each variable for matching
-  if (!is.null(covariates)) {
-    
-    synth_data$group_id <- interaction(synth_data[, covariates], drop = TRUE)
-    
-  } else {
-    
-    synth_data$group_id <- 1
-    
-  }
-  
-  
-  # Get observed group proportions
+
   group_props <- prop.table(table(data$group_id))
-  
-  # Calculate how many samples to draw per group (rounded)
   group_n <- round(group_props * n_aug)
-  
-  # Ensure total = n_aug (adjust for rounding error)
   diff_n <- n_aug - sum(group_n)
   if (diff_n != 0) {
-    # Adjust the largest group up/down to match n_aug exactly
     adjust_group <- names(which.max(group_n))
     group_n[adjust_group] <- group_n[adjust_group] + diff_n
   }
-  
-  # Sample per group
-  sampled_synth <- synth_data |> 
-    dplyr::group_by(group_id) |> 
-    dplyr::group_split() |> 
-    lapply(function(df_group) {
-      gid <- unique(df_group$group_id)
-      n_sample <- group_n[as.character(gid)]
-      df_group[sample(1:nrow(df_group), n_sample, replace = FALSE), ]
-    }) |> 
-    dplyr::bind_rows() |> 
-    dplyr::select(-group_id)
-  
-  # Remove the `group_id` variable from data
-  data <- data |> dplyr::select(-group_id)
-  
-  # Round back to original data
-  synthetic_data <- setNames(
-    purrr::map2_dfc(
-      data,
-      sampled_synth,
-      ~ if (all(!is.na(.x)) && all(abs(.x - round(.x)) < .Machine$double.eps^0.5)) {
-        round(.y)
-      } else {
-        .y
+
+  synth_predict <- stats::setNames(
+    lapply(
+      seq_along(groups),
+      function(i) {
+        g <- groups[[i]]
+        data_g <- feed_data[feed_data$group_id == g, , drop = FALSE]
+        n_sample <- as.integer(group_n[[g]])
+
+        cor_group_raw <- tryCatch(
+          corpcor::cor.shrink(data_g[, variables, drop = FALSE], verbose = FALSE),
+          error = function(e) cor_global
+        )
+        cor_shrunk <- shrink_cormat(cor_group_raw, cor_global, nrow(data_g))
+        cor_shrunk <- stabilize_correlation_matrix(cor_shrunk)
+
+        cop <- copula::normalCopula(
+          param = cor_shrunk[lower.tri(cor_shrunk)],
+          dim = length(variables),
+          dispstr = "un"
+        )
+
+        u_mat <- with_seed(
+          seed + length(groups) + i - 1,
+          simulate_gaussian_copula(n_sample, cor_shrunk)
+        )
+        synth_df <- as.data.frame(u_mat)
+        colnames(synth_df) <- variables
+
+        for (v in variables) {
+          synth_df[[v]] <- empirical_quantile_map(
+            u = synth_df[[v]],
+            x = data_g[[v]]
+          )
+
+          min_val <- min(data[[v]], na.rm = TRUE)
+          max_val <- max(data[[v]], na.rm = TRUE)
+
+          if (is.numeric(synth_df[[v]]) || is.integer(synth_df[[v]])) {
+            synth_df[[v]] <- pmin(pmax(synth_df[[v]], min_val), max_val)
+            if (round_int) {
+              synth_df[[v]] <- reconstruct_column(synth_df[[v]], data[[v]])
+            }
+          }
+        }
+
+        if (!is.null(covariates)) {
+          cov_row <- data[data$group_id == g, covariates, drop = FALSE][1, , drop = FALSE]
+          cov_block <- cov_row[rep(1, n_sample), , drop = FALSE]
+          synth_df <- cbind(synth_df, cov_block)
+        }
+
+        list(
+          model = list(
+            copula = cop,
+            correlation = cor_shrunk,
+            margin = "empirical",
+            feeder_include_observed = include_observed,
+            feeder_min_multiplier = control$feeder_min_multiplier
+          ),
+          df = synth_df
+        )
       }
-    ), 
-    names(data) # Preserve column names
+    ),
+    groups
   )
-  
-  # Return
-  return_list <- list(
+
+  synth_data <- purrr::map_dfr(synth_predict, "df")
+  synth_models <- purrr::map(synth_predict, "model")
+
+  list(
     models = synth_models,
-    data = synthetic_data
+    data = synth_data
   )
-  
-  return(return_list)
-  
 }

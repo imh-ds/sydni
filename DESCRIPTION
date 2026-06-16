@@ -1,11 +1,11 @@
 Package: sydni
 Type: Package
-Title: Synthetic Data Augmentation with Noise Inference
+Title: SYDNI: Synthetic Data Augmentation with Noise-Informed Shrinkage
 Version: 0.1.0
 Author: Hohjin Im
 Maintainer: Hohjin Im <hohjini@uci.edu>
-Description: Synthetic Data Augmentation with Noise Inference (sydni) for 
-    robustness checks.
+Description: SYDNI: Synthetic Data Augmentation with Noise-Informed Shrinkage
+    (sydni) for robustness checks.
 License: GPL (>= 2)
 Encoding: UTF-8
 Depends:
@@ -18,10 +18,17 @@ Imports:
     copula,
     corpcor,
     infotheo,
-    rlang,
     progress
 Suggests:
-    cmdstanr
+    dbarts,
+    cmdstanr,
+    huge,
+    psych,
+    testthat (>= 3.0.0),
+    knitr,
+    rmarkdown
 Remotes:
     github::stan-dev/cmdstanr
-RoxygenNote: 7.3.2
+RoxygenNote: 8.0.0
+Config/testthat/edition: 3
+VignetteBuilder: knitr

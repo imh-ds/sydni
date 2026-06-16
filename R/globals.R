@@ -5,6 +5,10 @@ utils::globalVariables(
     "var",
     "n",
     "group_id",
-    "sd_scale"
+    "sd_scale",
+    "prop",
+    "final_n",
+    "target_n",
+    "syn"
   )
 )

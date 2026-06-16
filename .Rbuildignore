@@ -6,3 +6,17 @@
 
 # Legacy folder
 ^Legacy$
+
+# GitHub metadata
+^\.github$
+
+# Local development package library
+^local_r_lib$
+
+# Development experiments, manuscripts, and benchmark outputs
+^tests/3_Experiments$
+^inst/benchmarks$
+^paper$
+^results$
+^TECHNICAL_METHODS\.md$
+^vignettes$

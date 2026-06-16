@@ -15,14 +15,11 @@
 #'
 #' @keywords internal
 compute_c_for_p <- function(x, p) {
-  
-  # x: numeric or integer vector
-  # p: desired fraction that should change by >= 1 after rounding
-  sigma <- sd(x)
-  if (p <= 0 || p >= 1) stop("p must be between 0 and 1, exclusive")
-  c_val <- 0.5 / (sigma * (1 - p))
-  c_val
-  
+  if (!is.numeric(p) || length(p) != 1 || is.na(p) || p <= 0 || p >= 1) {
+    stop("`p` must be a single numeric value between 0 and 1.")
+  }
+
+  p
 }
 
 #' Compute noise scale \code{c} such that noise variance equals \code{f *
@@ -44,9 +41,9 @@ compute_c_for_p <- function(x, p) {
 #'
 #' @keywords internal
 compute_c_for_f <- function(f) {
-  
-  # f: desired Var(noise) / Var(x)
-  if (f < 0 || f > 1) stop("f should be between 0 and 1")
+  if (!is.numeric(f) || length(f) != 1 || is.na(f) || f <= 0 || f > 1) {
+    stop("`f` must be a single numeric value in (0, 1].")
+  }
+
   sqrt(f)
-  
 }
