@@ -1,7 +1,7 @@
 Package: sydni
 Type: Package
 Title: SYDNI: Synthetic Data Augmentation with Noise-Informed Shrinkage
-Version: 0.1.0
+Version: 0.2.0
 Author: Hohjin Im
 Maintainer: Hohjin Im <hohjini@uci.edu>
 Description: SYDNI: Synthetic Data Augmentation with Noise-Informed Shrinkage
