@@ -47,3 +47,29 @@ test_that("stabilized copula simulation handles nearly singular correlations", {
   expect_equal(dim(draws), c(10, 3))
   expect_true(all(draws >= 0 & draws <= 1))
 })
+
+test_that("copula engine applies measurement-aware block shrinkage", {
+  set.seed(1)
+  latent_a <- rnorm(120)
+  latent_b <- 0.7 * latent_a + rnorm(120, sd = 0.7)
+  df <- data.frame(
+    a1 = as.integer(cut(latent_a + rnorm(120, sd = 0.3), 5, labels = FALSE)),
+    a2 = as.integer(cut(latent_a + rnorm(120, sd = 0.3), 5, labels = FALSE)),
+    b1 = as.integer(cut(latent_b + rnorm(120, sd = 0.3), 5, labels = FALSE)),
+    b2 = as.integer(cut(latent_b + rnorm(120, sd = 0.3), 5, labels = FALSE))
+  )
+
+  out <- engine_copula(
+    data = df,
+    variables = names(df),
+    measurement_blocks = list(alpha = c("a1", "a2"), beta = c("b1", "b2")),
+    between_block_shrink = 0.25,
+    n_aug = 40,
+    seed = 11
+  )
+
+  cor_used <- out$models$all$correlation
+  expect_gt(abs(cor_used["a1", "a2"]), abs(cor_used["a1", "b1"]))
+  expect_equal(out$models$all$between_block_shrink, 0.25)
+  expect_equal(names(out$models$all$measurement_blocks), c("alpha", "beta"))
+})

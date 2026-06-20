@@ -32,6 +32,13 @@
 #'       \mathrm{cor.shrink}(D[V]).
 #'     }
 #'     This matrix is used as a stable dependence target for small subgroups.
+#'     If \code{measurement_blocks} are supplied, this observed global matrix is
+#'     also retained as the measurement reference. Between-block correlations
+#'     are attenuated by \code{between_block_shrink}, but each within-block
+#'     submatrix is restored from the observed global reference before copula
+#'     simulation. In effect, the engine applies conservative shrinkage to
+#'     structural relations among measurement families while protecting the
+#'     internal item relations that support reliability, omega, and AVE.
 #'
 #'   \item For each subgroup \eqn{g}, compute its observed size
 #'     \eqn{n_g}, observed proportion \eqn{\pi_g = n_g / n_{\mathrm{obs}}},
@@ -83,7 +90,9 @@
 #'       \mathrm{cor.shrink}(D_g^{\mathrm{feed}}[V]).
 #'     }
 #'     If this estimate fails, the implementation falls back to
-#'     \eqn{R_{\mathrm{global}}}. The subgroup matrix is then blended toward
+#'     \eqn{R_{\mathrm{global}}}. With measurement blocks, the same
+#'     between-block attenuation and within-block restoration are applied to the
+#'     subgroup matrix. The subgroup matrix is then blended toward
 #'     the global target:
 #'     \deqn{
 #'       R_g^\star =
@@ -98,7 +107,11 @@
 #'     estimate, while smaller subgroup feeder sizes borrow more from the global
 #'     correlation structure.
 #'
-#'   \item Stabilize \eqn{R_g^\star} before simulation. The implementation
+#'   \item Stabilize \eqn{R_g^\star} before simulation. When measurement blocks
+#'     are supplied, within-block submatrices are restored again from the
+#'     observed global reference after subgroup/global blending so that
+#'     positive-definite adjustment does not become the primary determinant of
+#'     item-level structure. The implementation
 #'     replaces missing entries with zero, symmetrizes the matrix, sets the
 #'     diagonal to one, floors eigenvalues below a small tolerance, reconstructs
 #'     the matrix, and rescales it back to unit diagonal. This produces a
@@ -169,6 +182,14 @@
 #'   rows are pooled with noisy feeder rows before estimating subgroup
 #'   correlations. If `feeder_include_observed = NULL`, observed rows are pooled
 #'   only when covariates are supplied, matching the original copula engine.
+#' @param measurement_blocks Optional named list defining item blocks whose
+#'   within-block correlations should be preserved while between-block
+#'   correlations are shrunk. Also accepts a `cscore::composite_list()`-style
+#'   list with `lower` and `higher` elements. Within-block correlations are
+#'   restored from the observed global correlation reference before simulation.
+#' @param between_block_shrink Optional numeric value in `[0, 1]`. When
+#'   `measurement_blocks` is supplied, between-block correlations are
+#'   multiplied by this value. Defaults to `0.50`.
 #' @param seed Numeric. Seed for reproducibility.
 #'
 #' @return A named list with elements `models` and `data`.
@@ -186,6 +207,8 @@ engine_copula <- function(
     noise_bounds = NULL,
     n_aug = nrow(data),
     engine_control = NULL,
+    measurement_blocks = NULL,
+    between_block_shrink = NULL,
     seed = NA) {
   noise_method <- match.arg(noise_method)
   engine_control <- validate_engine_control(engine_control)
@@ -219,6 +242,23 @@ engine_copula <- function(
     variables <- setdiff(colnames(data), covariates)
   }
 
+  normalized_blocks <- as_measurement_blocks(
+    measurement_blocks = measurement_blocks,
+    variables = variables
+  )
+  if (!is.null(normalized_blocks) && is.null(between_block_shrink)) {
+    between_block_shrink <- 0.5
+  }
+  block_shrinkage_matrix <- if (!is.null(normalized_blocks)) {
+    make_block_shrinkage_matrix(
+      variables = variables,
+      measurement_blocks = normalized_blocks,
+      between_block_shrink = between_block_shrink
+    )
+  } else {
+    NULL
+  }
+
   if (!is.null(covariates)) {
     data$group_id <- interaction(data[, covariates], drop = TRUE, lex.order = TRUE)
   } else {
@@ -226,7 +266,17 @@ engine_copula <- function(
   }
 
   groups <- unique(as.character(data$group_id))
-  cor_global <- corpcor::cor.shrink(data[, variables, drop = FALSE], verbose = FALSE)
+  cor_global_reference <- corpcor::cor.shrink(data[, variables, drop = FALSE], verbose = FALSE)
+  cor_global <- cor_global_reference
+  if (!is.null(block_shrinkage_matrix)) {
+    cor_global <- apply_block_shrinkage(cor_global, block_shrinkage_matrix)
+    cor_global <- restore_within_block_correlations(
+      cor_mat = cor_global,
+      reference_cor = cor_global_reference,
+      measurement_blocks = normalized_blocks
+    )
+    cor_global <- stabilize_correlation_matrix(cor_global)
+  }
 
   proportions <- data |>
     dplyr::group_by(group_id) |>
@@ -310,8 +360,32 @@ engine_copula <- function(
           corpcor::cor.shrink(data_g[, variables, drop = FALSE], verbose = FALSE),
           error = function(e) cor_global
         )
+        if (!is.null(block_shrinkage_matrix)) {
+          cor_group_raw <- apply_block_shrinkage(cor_group_raw, block_shrinkage_matrix)
+          cor_group_raw <- restore_within_block_correlations(
+            cor_mat = cor_group_raw,
+            reference_cor = cor_global_reference,
+            measurement_blocks = normalized_blocks
+          )
+          cor_group_raw <- stabilize_correlation_matrix(cor_group_raw)
+        }
         cor_shrunk <- shrink_cormat(cor_group_raw, cor_global, nrow(data_g))
+        if (!is.null(normalized_blocks)) {
+          cor_shrunk <- restore_within_block_correlations(
+            cor_mat = cor_shrunk,
+            reference_cor = cor_global_reference,
+            measurement_blocks = normalized_blocks
+          )
+        }
         cor_shrunk <- stabilize_correlation_matrix(cor_shrunk)
+        if (!is.null(normalized_blocks)) {
+          cor_shrunk <- restore_within_block_correlations(
+            cor_mat = cor_shrunk,
+            reference_cor = cor_global_reference,
+            measurement_blocks = normalized_blocks
+          )
+          cor_shrunk <- stabilize_correlation_matrix(cor_shrunk)
+        }
 
         cop <- copula::normalCopula(
           param = cor_shrunk[lower.tri(cor_shrunk)],
@@ -355,7 +429,10 @@ engine_copula <- function(
             correlation = cor_shrunk,
             margin = "empirical",
             feeder_include_observed = include_observed,
-            feeder_min_multiplier = control$feeder_min_multiplier
+            feeder_min_multiplier = control$feeder_min_multiplier,
+            measurement_blocks = normalized_blocks,
+            between_block_shrink = between_block_shrink,
+            within_block_reference = "observed_global"
           ),
           df = synth_df
         )

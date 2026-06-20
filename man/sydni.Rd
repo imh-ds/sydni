@@ -34,6 +34,8 @@ sydni(
     "fixed_param"),
   backend = c("rstan", "cmdstanr"),
   engine_control = NULL,
+  measurement_blocks = NULL,
+  between_block_shrink = NULL,
   seed = NA
 )
 }
@@ -104,6 +106,15 @@ replacement.}
 \item{engine_control}{Optional named list of engine-specific tuning
 parameters. Used by the `"copula"`, `"bart"`, `"factor"`, and
 `"graphical"` engines.}
+
+\item{measurement_blocks}{Optional named list defining item blocks whose
+within-block correlations should be preserved by the copula engine. Also
+accepts a `cscore::composite_list()`-style list with `lower` and `higher`
+elements.}
+
+\item{between_block_shrink}{Optional numeric value in `[0, 1]`. When
+`measurement_blocks` is supplied to the copula engine, between-block
+correlations are multiplied by this value. Defaults to `0.50`.}
 
 \item{seed}{Numeric. Seed controlling internal sampling, noise injection,
 predictor selection, and model fitting.}

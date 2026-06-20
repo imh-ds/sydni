@@ -16,6 +16,8 @@ engine_copula(
   noise_bounds = NULL,
   n_aug = nrow(data),
   engine_control = NULL,
+  measurement_blocks = NULL,
+  between_block_shrink = NULL,
   seed = NA
 )
 }
@@ -50,6 +52,16 @@ noisy feeder target size per synthesized variable, and
 rows are pooled with noisy feeder rows before estimating subgroup
 correlations. If `feeder_include_observed = NULL`, observed rows are pooled
 only when covariates are supplied, matching the original copula engine.}
+
+\item{measurement_blocks}{Optional named list defining item blocks whose
+within-block correlations should be preserved while between-block
+correlations are shrunk. Also accepts a `cscore::composite_list()`-style
+list with `lower` and `higher` elements. Within-block correlations are
+restored from the observed global correlation reference before simulation.}
+
+\item{between_block_shrink}{Optional numeric value in `[0, 1]`. When
+`measurement_blocks` is supplied, between-block correlations are
+multiplied by this value. Defaults to `0.50`.}
 
 \item{seed}{Numeric. Seed for reproducibility.}
 }
@@ -88,6 +100,13 @@ The engine proceeds in seven steps:
       \mathrm{cor.shrink}(D[V]).
     }
     This matrix is used as a stable dependence target for small subgroups.
+    If \code{measurement_blocks} are supplied, this observed global matrix is
+    also retained as the measurement reference. Between-block correlations
+    are attenuated by \code{between_block_shrink}, but each within-block
+    submatrix is restored from the observed global reference before copula
+    simulation. In effect, the engine applies conservative shrinkage to
+    structural relations among measurement families while protecting the
+    internal item relations that support reliability, omega, and AVE.
 
   \item For each subgroup \eqn{g}, compute its observed size
     \eqn{n_g}, observed proportion \eqn{\pi_g = n_g / n_{\mathrm{obs}}},
@@ -139,7 +158,9 @@ The engine proceeds in seven steps:
       \mathrm{cor.shrink}(D_g^{\mathrm{feed}}[V]).
     }
     If this estimate fails, the implementation falls back to
-    \eqn{R_{\mathrm{global}}}. The subgroup matrix is then blended toward
+    \eqn{R_{\mathrm{global}}}. With measurement blocks, the same
+    between-block attenuation and within-block restoration are applied to the
+    subgroup matrix. The subgroup matrix is then blended toward
     the global target:
     \deqn{
       R_g^\star =
@@ -154,7 +175,11 @@ The engine proceeds in seven steps:
     estimate, while smaller subgroup feeder sizes borrow more from the global
     correlation structure.
 
-  \item Stabilize \eqn{R_g^\star} before simulation. The implementation
+  \item Stabilize \eqn{R_g^\star} before simulation. When measurement blocks
+    are supplied, within-block submatrices are restored again from the
+    observed global reference after subgroup/global blending so that
+    positive-definite adjustment does not become the primary determinant of
+    item-level structure. The implementation
     replaces missing entries with zero, symmetrizes the matrix, sets the
     diagonal to one, floors eigenvalues below a small tolerance, reconstructs
     the matrix, and rescales it back to unit diagonal. This produces a

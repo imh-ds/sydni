@@ -43,6 +43,156 @@ validate_engine_control <- function(engine_control) {
   engine_control
 }
 
+is_cscore_composite_list <- function(x) {
+  is.list(x) &&
+    !is.null(x$lower) &&
+    is.list(x$lower) &&
+    (is.null(x$higher) || is.list(x$higher))
+}
+
+merge_higher_order_blocks <- function(composite_list) {
+  lower <- composite_list$lower
+  higher <- composite_list$higher
+
+  if (is.null(higher) || length(higher) == 0) {
+    return(lower)
+  }
+
+  referenced_lower <- unique(unlist(higher, use.names = FALSE))
+  missing_lower <- setdiff(referenced_lower, names(lower))
+  if (length(missing_lower) > 0) {
+    stop(
+      paste0(
+        "`measurement_blocks$higher` references lower-order composites not present in `measurement_blocks$lower`: ",
+        paste(missing_lower, collapse = ", "),
+        "."
+      )
+    )
+  }
+
+  higher_blocks <- lapply(higher, function(lower_names) {
+    unique(unlist(lower[lower_names], use.names = FALSE))
+  })
+
+  remaining_lower <- lower[setdiff(names(lower), referenced_lower)]
+  c(remaining_lower, higher_blocks)
+}
+
+as_measurement_blocks <- function(measurement_blocks, variables) {
+  if (is.null(measurement_blocks)) {
+    return(NULL)
+  }
+
+  blocks <- if (is_cscore_composite_list(measurement_blocks)) {
+    merge_higher_order_blocks(measurement_blocks)
+  } else {
+    measurement_blocks
+  }
+
+  if (!is.list(blocks) || length(blocks) == 0) {
+    stop("`measurement_blocks` must be NULL or a non-empty named list.")
+  }
+
+  if (is.null(names(blocks)) || any(names(blocks) == "")) {
+    stop("`measurement_blocks` must be a named list.")
+  }
+
+  blocks <- lapply(blocks, function(x) {
+    if (!is.character(x)) {
+      stop("Each `measurement_blocks` element must be a character vector.")
+    }
+    unique(x)
+  })
+
+  block_items <- unlist(blocks, use.names = FALSE)
+  missing_items <- setdiff(block_items, variables)
+  if (length(missing_items) > 0) {
+    stop(
+      paste0(
+        "`measurement_blocks` contains items not present in `variables`: ",
+        paste(missing_items, collapse = ", "),
+        "."
+      )
+    )
+  }
+
+  duplicated_items <- unique(block_items[duplicated(block_items)])
+  if (length(duplicated_items) > 0) {
+    stop(
+      paste0(
+        "`measurement_blocks` items cannot appear in more than one final block: ",
+        paste(duplicated_items, collapse = ", "),
+        "."
+      )
+    )
+  }
+
+  unblocked <- setdiff(variables, block_items)
+  singleton_blocks <- stats::setNames(as.list(unblocked), unblocked)
+  c(blocks, singleton_blocks)
+}
+
+make_block_shrinkage_matrix <- function(
+    variables,
+    measurement_blocks,
+    between_block_shrink = 0.5
+) {
+  if (
+    !is.numeric(between_block_shrink) ||
+      length(between_block_shrink) != 1 ||
+      is.na(between_block_shrink) ||
+      between_block_shrink < 0 ||
+      between_block_shrink > 1
+  ) {
+    stop("`between_block_shrink` must be a single numeric value in [0, 1].")
+  }
+
+  block_lookup <- stats::setNames(rep(NA_character_, length(variables)), variables)
+  for (block_name in names(measurement_blocks)) {
+    block_lookup[measurement_blocks[[block_name]]] <- block_name
+  }
+
+  shrinkage <- matrix(
+    between_block_shrink,
+    nrow = length(variables),
+    ncol = length(variables),
+    dimnames = list(variables, variables)
+  )
+  same_block <- outer(block_lookup, block_lookup, "==")
+  shrinkage[same_block] <- 1
+  diag(shrinkage) <- 1
+  shrinkage
+}
+
+apply_block_shrinkage <- function(cor_mat, shrinkage_matrix) {
+  shrinkage_matrix <- shrinkage_matrix[rownames(cor_mat), colnames(cor_mat), drop = FALSE]
+  out <- cor_mat * shrinkage_matrix
+  diag(out) <- 1
+  out <- (out + t(out)) / 2
+  stabilize_correlation_matrix(out)
+}
+
+restore_within_block_correlations <- function(cor_mat, reference_cor, measurement_blocks) {
+  if (is.null(measurement_blocks)) {
+    return(cor_mat)
+  }
+
+  out <- as.matrix(cor_mat)
+  reference_cor <- as.matrix(reference_cor)
+  reference_cor <- reference_cor[rownames(out), colnames(out), drop = FALSE]
+
+  for (block in measurement_blocks) {
+    block <- intersect(block, rownames(out))
+    if (length(block) >= 2) {
+      out[block, block] <- reference_cor[block, block, drop = FALSE]
+    }
+  }
+
+  diag(out) <- 1
+  out <- (out + t(out)) / 2
+  out
+}
+
 resolve_sydni_columns <- function(data, variables = NULL, covariates = NULL) {
   data_names <- names(data)
 

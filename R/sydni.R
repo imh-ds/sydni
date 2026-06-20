@@ -64,6 +64,13 @@
 #' @param engine_control Optional named list of engine-specific tuning
 #'   parameters. Used by the `"copula"`, `"bart"`, `"factor"`, and
 #'   `"graphical"` engines.
+#' @param measurement_blocks Optional named list defining item blocks whose
+#'   within-block correlations should be preserved by the copula engine. Also
+#'   accepts a `cscore::composite_list()`-style list with `lower` and `higher`
+#'   elements.
+#' @param between_block_shrink Optional numeric value in `[0, 1]`. When
+#'   `measurement_blocks` is supplied to the copula engine, between-block
+#'   correlations are multiplied by this value. Defaults to `0.50`.
 #' @param seed Numeric. Seed controlling internal sampling, noise injection,
 #'   predictor selection, and model fitting.
 #'
@@ -122,6 +129,8 @@ sydni <- function(
     algorithm = c("fullrank", "meanfield", "sampling", "pathfinder", "laplace", "fixed_param"),
     backend = c("rstan", "cmdstanr"),
     engine_control = NULL,
+    measurement_blocks = NULL,
+    between_block_shrink = NULL,
     seed = NA
 ) {
   engine <- match.arg(engine)
@@ -140,6 +149,10 @@ sydni <- function(
     if (is.null(cmdstanr::cmdstan_version(error_on_NA = FALSE))) {
       stop("CmdStan must be installed and configured for backend = 'cmdstanr'.")
     }
+  }
+
+  if (engine != "copula" && (!is.null(measurement_blocks) || !is.null(between_block_shrink))) {
+    warning("`measurement_blocks` and `between_block_shrink` are currently used only when `engine = 'copula'`.")
   }
 
   columns <- resolve_sydni_columns(
@@ -234,6 +247,8 @@ sydni <- function(
     algorithm = algorithm,
     backend = backend,
     engine_control = engine_control,
+    measurement_blocks = measurement_blocks,
+    between_block_shrink = between_block_shrink,
     seed = seed,
     input_summary = list(
       n_obs = nrow(data),
@@ -285,6 +300,8 @@ sydni <- function(
       round_int = round_int,
       n_aug = n_aug,
       engine_control = engine_control,
+      measurement_blocks = measurement_blocks,
+      between_block_shrink = between_block_shrink,
       seed = seed
     ),
     bart = engine_bart(

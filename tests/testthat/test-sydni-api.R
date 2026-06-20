@@ -72,3 +72,27 @@ test_that("sydni rejects unsupported synthesized column types", {
     "Unsupported synthesized column types"
   )
 })
+
+test_that("sydni forwards measurement-aware copula arguments", {
+  df <- data.frame(
+    a1 = rep(1:5, 20),
+    a2 = rep(5:1, 20),
+    b1 = rep(c(1:5, 5:1), 10),
+    b2 = rep(c(5:1, 1:5), 10)
+  )
+
+  out <- sydni(
+    data = df,
+    variables = names(df),
+    engine = "copula",
+    measurement_blocks = list(alpha = c("a1", "a2"), beta = c("b1", "b2")),
+    between_block_shrink = 0.25,
+    n_aug = 20,
+    seed = 3
+  )
+
+  expect_equal(nrow(out$data), 20)
+  expect_equal(out$meta$between_block_shrink, 0.25)
+  expect_equal(out$models$all$between_block_shrink, 0.25)
+  expect_equal(names(out$models$all$measurement_blocks), c("alpha", "beta"))
+})
