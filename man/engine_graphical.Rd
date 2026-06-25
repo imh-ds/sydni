@@ -18,6 +18,8 @@ engine_graphical(
   n_aug = nrow(data),
   k = 2,
   engine_control = NULL,
+  measurement_blocks = NULL,
+  between_block_shrink = NULL,
   seed = NA
 )
 }
@@ -52,6 +54,15 @@ rows before model fitting.}
 
 \item{engine_control}{Optional named list. Supported elements include
 `transform`, `selection`, `ebic_gamma`, `lambda_fixed`, and `pd_tol`.}
+
+\item{measurement_blocks}{Optional named list defining item blocks whose
+within-block latent correlations should be preserved while between-block
+latent correlations are shrunk. Also accepts a
+`cscore::composite_list()`-style list with `lower` and `higher` elements.}
+
+\item{between_block_shrink}{Optional numeric value in `[0, 1]`. When
+`measurement_blocks` is supplied, between-block latent correlations are
+multiplied by this value. Defaults to `0.50`.}
 
 \item{seed}{Numeric. Seed for reproducibility.}
 }

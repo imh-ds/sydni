@@ -172,6 +172,13 @@
 #' @param k Numeric. SYDNI shrinkage exponent.
 #' @param engine_control Optional named list. Supported elements include
 #'   `transform`, `selection`, `ebic_gamma`, `lambda_fixed`, and `pd_tol`.
+#' @param measurement_blocks Optional named list defining item blocks whose
+#'   within-block latent correlations should be preserved while between-block
+#'   latent correlations are shrunk. Also accepts a
+#'   `cscore::composite_list()`-style list with `lower` and `higher` elements.
+#' @param between_block_shrink Optional numeric value in `[0, 1]`. When
+#'   `measurement_blocks` is supplied, between-block latent correlations are
+#'   multiplied by this value. Defaults to `0.50`.
 #' @param seed Numeric. Seed for reproducibility.
 #'
 #' @return A named list with elements `models` and `data`.
@@ -191,6 +198,8 @@ engine_graphical <- function(
     n_aug = nrow(data),
     k = 2,
     engine_control = NULL,
+    measurement_blocks = NULL,
+    between_block_shrink = NULL,
     seed = NA
 ) {
   noise_method <- match.arg(noise_method)
@@ -219,6 +228,23 @@ engine_graphical <- function(
     engine_control
   )
 
+  normalized_blocks <- as_measurement_blocks(
+    measurement_blocks = measurement_blocks,
+    variables = variables
+  )
+  if (!is.null(normalized_blocks) && is.null(between_block_shrink)) {
+    between_block_shrink <- 0.5
+  }
+  block_shrinkage_matrix <- if (!is.null(normalized_blocks)) {
+    make_block_shrinkage_matrix(
+      variables = variables,
+      measurement_blocks = normalized_blocks,
+      between_block_shrink = between_block_shrink
+    )
+  } else {
+    NULL
+  }
+
   group_plan <- build_group_plan(
     data = data,
     variables = variables,
@@ -242,6 +268,15 @@ engine_graphical <- function(
   group_n <- compute_group_output_sizes(group_plan$data, n_aug)
   aug_ratio <- n_aug / nrow(data)
   gamma_eff <- min(1, control$ebic_gamma + 0.15 * log1p(aug_ratio) * k)
+  global_struct_mat <- make_structural_matrix(data, variables)
+  global_latent_mat <- if (identical(control$transform, "nonparanormal")) {
+    quiet_huge_npn(global_struct_mat)
+  } else {
+    scale(global_struct_mat)
+  }
+  global_latent_mat <- as.matrix(global_latent_mat)
+  cor_global_reference <- stats::cor(global_latent_mat, use = "pairwise.complete.obs")
+  cor_global_reference <- stabilize_correlation_matrix(cor_global_reference, tol = control$pd_tol)
 
   synth_predict <- stats::setNames(
     lapply(
@@ -253,7 +288,7 @@ engine_graphical <- function(
 
         struct_mat <- make_structural_matrix(data_g, variables)
         latent_mat <- if (identical(control$transform, "nonparanormal")) {
-          suppressMessages(huge::huge.npn(struct_mat))
+          quiet_huge_npn(struct_mat)
         } else {
           scale(struct_mat)
         }
@@ -325,6 +360,23 @@ engine_graphical <- function(
         } else {
           fallback <- TRUE
         }
+        sigma_raw <- stabilize_correlation_matrix(sigma, tol = control$pd_tol)
+        sigma_adjusted <- sigma_raw
+        if (!is.null(block_shrinkage_matrix)) {
+          sigma_adjusted <- apply_block_shrinkage(sigma_adjusted, block_shrinkage_matrix)
+          sigma_adjusted <- restore_within_block_correlations(
+            cor_mat = sigma_adjusted,
+            reference_cor = cor_global_reference,
+            measurement_blocks = normalized_blocks
+          )
+          sigma_adjusted <- stabilize_correlation_matrix(sigma_adjusted, tol = control$pd_tol)
+          sigma_adjusted <- restore_within_block_correlations(
+            cor_mat = sigma_adjusted,
+            reference_cor = cor_global_reference,
+            measurement_blocks = normalized_blocks
+          )
+        }
+        sigma <- sigma_adjusted
         sigma <- stabilize_correlation_matrix(sigma, tol = control$pd_tol)
 
         u_mat <- with_seed(seed + i - 1, simulate_gaussian_copula(n_sample, sigma))
@@ -355,10 +407,16 @@ engine_graphical <- function(
           model = list(
             precision = if (is.null(select_fit)) NULL else select_fit$opt.icov,
             correlation = sigma,
+            correlation_raw = sigma_raw,
+            correlation_measurement_adjusted = sigma_adjusted,
+            correlation_global_reference = cor_global_reference,
             selection = select_fit,
             huge_fit = graph_fit,
             fallback = fallback,
-            active_variables = variables[active]
+            active_variables = variables[active],
+            measurement_mode = if (!is.null(normalized_blocks)) "block_graphical" else NULL,
+            measurement_blocks = normalized_blocks,
+            between_block_shrink = between_block_shrink
           ),
           df = synth_df
         )

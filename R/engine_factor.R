@@ -334,6 +334,7 @@ engine_factor <- function(
         uniquenesses <- NULL
         cor_mat <- NULL
         fa_fit <- NULL
+        estimation_warnings <- character()
 
         if (length(inactive_vars) > 0) {
           warning(
@@ -351,10 +352,17 @@ engine_factor <- function(
           struct_active <- struct_df[, active_vars, drop = FALSE]
 
           cor_mat <- if (identical(control$correlation_method, "polychoric")) {
-            tryCatch(
-              psych::polychoric(struct_active)$rho,
-              error = function(e) stats::cor(struct_active, use = "pairwise.complete.obs")
+            polychoric_result <- tryCatch(
+              capture_warnings(psych::polychoric(struct_active)$rho),
+              error = function(e) e
             )
+
+            if (inherits(polychoric_result, "error")) {
+              stats::cor(struct_active, use = "pairwise.complete.obs")
+            } else {
+              estimation_warnings <- c(estimation_warnings, polychoric_result$warnings)
+              polychoric_result$value
+            }
           } else {
             stats::cor(struct_active, use = "pairwise.complete.obs")
           }
@@ -364,14 +372,14 @@ engine_factor <- function(
           n_factors_eff <- min(as.integer(control$n_factors), length(active_vars) - 1L)
 
           fa_result <- tryCatch(
-            psych::fa(
+            capture_warnings(psych::fa(
               r = cor_mat,
               nfactors = n_factors_eff,
               n.obs = nrow(struct_active),
               fm = control$extraction_method,
               rotate = "none",
               warnings = FALSE
-            ),
+            )),
             error = function(e) e
           )
 
@@ -379,7 +387,8 @@ engine_factor <- function(
             fallback <- TRUE
             fallback_reason <- conditionMessage(fa_result)
           } else {
-            fa_fit <- fa_result
+            estimation_warnings <- c(estimation_warnings, fa_result$warnings)
+            fa_fit <- fa_result$value
 
             loadings <- unclass(fa_fit$loadings)
             if (is.null(dim(loadings))) {
@@ -478,7 +487,8 @@ engine_factor <- function(
             fallback = fallback,
             fallback_reason = fallback_reason,
             active_variables = active_vars,
-            inactive_variables = inactive_vars
+            inactive_variables = inactive_vars,
+            warnings = unique(estimation_warnings)
           ),
           df = synth_df
         )
@@ -521,6 +531,7 @@ engine_factor_measurement_aware <- function(
   }
 
   fit_block_model <- function(block_name, block_vars) {
+    block_warnings <- character()
     struct_block <- as.data.frame(lapply(data[, block_vars, drop = FALSE], coerce_structural_input))
     active <- vapply(
       struct_block,
@@ -542,16 +553,17 @@ engine_factor_measurement_aware <- function(
         factor_fit = NULL,
         fallback = TRUE,
         fallback_reason = "Fewer than two active items in the measurement block.",
-        measurement_model = if (length(block_vars) == 1) "singleton" else "empirical"
+        measurement_model = if (length(block_vars) == 1) "singleton" else "empirical",
+        warnings = block_warnings
       ))
     }
 
     cor_mat <- tryCatch(
-      estimate_factor_item_correlation(
+      capture_warnings(estimate_factor_item_correlation(
         data = data,
         variables = active_vars,
         correlation_method = control$correlation_method
-      ),
+      )),
       error = function(e) e
     )
 
@@ -567,19 +579,22 @@ engine_factor_measurement_aware <- function(
         factor_fit = NULL,
         fallback = TRUE,
         fallback_reason = conditionMessage(cor_mat),
-        measurement_model = "empirical"
+        measurement_model = "empirical",
+        warnings = block_warnings
       ))
     }
+    block_warnings <- c(block_warnings, cor_mat$warnings)
+    cor_mat <- cor_mat$value
 
     fa_result <- tryCatch(
-      psych::fa(
+      capture_warnings(psych::fa(
         r = cor_mat,
         nfactors = 1L,
         n.obs = nrow(data),
         fm = control$extraction_method,
         rotate = "none",
         warnings = FALSE
-      ),
+      )),
       error = function(e) e
     )
 
@@ -595,9 +610,12 @@ engine_factor_measurement_aware <- function(
         factor_fit = NULL,
         fallback = TRUE,
         fallback_reason = conditionMessage(fa_result),
-        measurement_model = "empirical"
+        measurement_model = "empirical",
+        warnings = block_warnings
       ))
     }
+    block_warnings <- c(block_warnings, fa_result$warnings)
+    fa_result <- fa_result$value
 
     loadings <- unclass(fa_result$loadings)
     if (is.null(dim(loadings))) {
@@ -626,7 +644,8 @@ engine_factor_measurement_aware <- function(
       factor_fit = fa_result,
       fallback = FALSE,
       fallback_reason = NULL,
-      measurement_model = "one_factor"
+      measurement_model = "one_factor",
+      warnings = unique(block_warnings)
     )
   }
 
@@ -801,6 +820,7 @@ engine_factor_measurement_aware <- function(
             fallback_reason = purrr::map_chr(block_models, function(x) {
               if (is.null(x$fallback_reason)) "" else x$fallback_reason
             }),
+            warnings = unique(unlist(purrr::map(block_models, "warnings"), use.names = FALSE)),
             active_variables = unique(unlist(purrr::map(block_models, "active_variables"), use.names = FALSE)),
             inactive_variables = unique(unlist(purrr::map(block_models, "inactive_variables"), use.names = FALSE))
           ),

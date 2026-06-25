@@ -43,6 +43,30 @@ validate_engine_control <- function(engine_control) {
   engine_control
 }
 
+capture_warnings <- function(expr) {
+  warnings <- character()
+  value <- withCallingHandlers(
+    force(expr),
+    warning = function(w) {
+      warnings <<- c(warnings, conditionMessage(w))
+      invokeRestart("muffleWarning")
+    }
+  )
+
+  list(
+    value = value,
+    warnings = unique(warnings)
+  )
+}
+
+quiet_huge_npn <- function(x) {
+  out <- NULL
+  utils::capture.output(
+    out <- suppressMessages(huge::huge.npn(x))
+  )
+  out
+}
+
 is_cscore_composite_list <- function(x) {
   is.list(x) &&
     !is.null(x$lower) &&
@@ -586,12 +610,26 @@ build_group_plan <- function(data, variables, covariates, n_aug, min_group_n = N
 
   sparse_groups <- proportions$group_id[proportions$n < min_group_n]
   if (length(sparse_groups) > 0) {
+    sparse_groups_chr <- as.character(sparse_groups)
+    shown_groups <- head(sparse_groups_chr, 10)
+    hidden_n <- length(sparse_groups_chr) - length(shown_groups)
+    hidden_text <- if (hidden_n > 0) {
+      paste0(", and ", hidden_n, " more")
+    } else {
+      ""
+    }
+
     warning(
       paste0(
         "Some covariate-defined subgroups are smaller than the recommended minimum (",
         min_group_n,
-        "): ",
-        paste(as.character(sparse_groups), collapse = ", "),
+        "). Showing ",
+        length(shown_groups),
+        " of ",
+        length(sparse_groups_chr),
+        " sparse subgroup(s): ",
+        paste(shown_groups, collapse = ", "),
+        hidden_text,
         "."
       )
     )

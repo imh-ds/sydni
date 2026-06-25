@@ -128,6 +128,38 @@ test_that("sydni forwards measurement-aware factor arguments", {
   expect_equal(names(out$models$all$measurement_blocks), c("alpha", "beta"))
 })
 
+test_that("sydni forwards measurement-aware graphical arguments", {
+  skip_if_not_installed("huge")
+
+  set.seed(19)
+  n <- 100
+  latent_a <- rnorm(n)
+  latent_b <- 0.5 * latent_a + rnorm(n, sd = 0.9)
+  df <- data.frame(
+    a1 = as.integer(cut(latent_a + rnorm(n, sd = 0.4), 5, labels = FALSE)),
+    a2 = as.integer(cut(latent_a + rnorm(n, sd = 0.4), 5, labels = FALSE)),
+    b1 = as.integer(cut(latent_b + rnorm(n, sd = 0.4), 5, labels = FALSE)),
+    b2 = as.integer(cut(latent_b + rnorm(n, sd = 0.4), 5, labels = FALSE))
+  )
+
+  out <- sydni(
+    data = df,
+    variables = names(df),
+    engine = "graphical",
+    measurement_blocks = list(alpha = c("a1", "a2"), beta = c("b1", "b2")),
+    between_block_shrink = 0.25,
+    engine_control = list(transform = "scale", selection = "fixed_lambda", lambda_fixed = 0.01),
+    n_aug = 20,
+    seed = 3
+  )
+
+  expect_equal(nrow(out$data), 20)
+  expect_equal(out$meta$between_block_shrink, 0.25)
+  expect_equal(out$models$all$between_block_shrink, 0.25)
+  expect_equal(out$models$all$measurement_mode, "block_graphical")
+  expect_equal(names(out$models$all$measurement_blocks), c("alpha", "beta"))
+})
+
 test_that("sydni warns about measurement arguments for unsupported engines", {
   skip_if_not_installed("dbarts")
 

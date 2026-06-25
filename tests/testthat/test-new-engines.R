@@ -212,3 +212,110 @@ test_that("graphical engine subgroups by covariate combinations when huge is ins
   expect_named(res, c("models", "data"))
   expect_equal(sort(unique(paste(res$data$g1, res$data$g2))), sort(unique(paste(dat$g1, dat$g2))))
 })
+
+test_that("measurement-aware graphical engine preserves block metadata and item support", {
+  skip_if_not_installed("huge")
+
+  set.seed(31)
+  n <- 120
+  latent_a <- rnorm(n)
+  latent_b <- 0.6 * latent_a + rnorm(n, sd = 0.8)
+  dat <- data.frame(
+    a1 = as.integer(cut(latent_a + rnorm(n, sd = 0.3), 5, labels = FALSE)),
+    a2 = as.integer(cut(latent_a + rnorm(n, sd = 0.3), 5, labels = FALSE)),
+    a3 = as.integer(cut(latent_a + rnorm(n, sd = 0.3), 5, labels = FALSE)),
+    b1 = as.integer(cut(latent_b + rnorm(n, sd = 0.3), 5, labels = FALSE)),
+    b2 = as.integer(cut(latent_b + rnorm(n, sd = 0.3), 5, labels = FALSE)),
+    b3 = as.integer(cut(latent_b + rnorm(n, sd = 0.3), 5, labels = FALSE)),
+    g = rep(c("x", "y"), each = n / 2)
+  )
+
+  res <- engine_graphical(
+    data = dat,
+    variables = c("a1", "a2", "a3", "b1", "b2", "b3"),
+    covariates = "g",
+    measurement_blocks = list(alpha = c("a1", "a2", "a3"), beta = c("b1", "b2", "b3")),
+    between_block_shrink = 0.2,
+    n_aug = 40,
+    engine_control = list(transform = "scale", selection = "fixed_lambda", lambda_fixed = 0.01),
+    seed = 5
+  )
+
+  expect_equal(nrow(res$data), 40)
+  expect_true(all(c("a1", "a2", "a3", "b1", "b2", "b3", "g") %in% names(res$data)))
+  expect_true(all(res$data$a1 %in% sort(unique(dat$a1))))
+  expect_equal(res$models$x$measurement_mode, "block_graphical")
+  expect_equal(res$models$x$between_block_shrink, 0.2)
+  expect_equal(names(res$models$x$measurement_blocks), c("alpha", "beta"))
+  expect_gt(
+    abs(res$models$x$correlation["a1", "a2"]),
+    abs(res$models$x$correlation["a1", "b1"])
+  )
+  expect_lt(
+    abs(res$models$x$correlation_measurement_adjusted["a1", "b1"]),
+    abs(res$models$x$correlation_raw["a1", "b1"])
+  )
+})
+
+test_that("measurement-aware graphical engine accepts cscore-style higher-order blocks", {
+  skip_if_not_installed("huge")
+
+  set.seed(32)
+  n <- 100
+  latent_grit <- rnorm(n)
+  latent_e <- 0.3 * latent_grit + rnorm(n, sd = 0.9)
+  dat <- data.frame(
+    gs1 = as.integer(cut(latent_grit + rnorm(n, sd = 0.4), 5, labels = FALSE)),
+    gs2 = as.integer(cut(latent_grit + rnorm(n, sd = 0.4), 5, labels = FALSE)),
+    gs3 = as.integer(cut(latent_grit + rnorm(n, sd = 0.4), 5, labels = FALSE)),
+    gs4 = as.integer(cut(latent_grit + rnorm(n, sd = 0.4), 5, labels = FALSE)),
+    e1 = as.integer(cut(latent_e + rnorm(n, sd = 0.4), 5, labels = FALSE)),
+    e2 = as.integer(cut(latent_e + rnorm(n, sd = 0.4), 5, labels = FALSE))
+  )
+  composite_list <- list(
+    lower = list(
+      consistency_interest = c("gs2", "gs3"),
+      perseverance_effort = c("gs1", "gs4"),
+      extraversion = c("e1", "e2")
+    ),
+    higher = list(
+      grit = c("consistency_interest", "perseverance_effort")
+    ),
+    order = c("consistency_interest", "perseverance_effort", "extraversion", "grit")
+  )
+
+  res <- engine_graphical(
+    data = dat,
+    variables = names(dat),
+    measurement_blocks = composite_list,
+    n_aug = 20,
+    engine_control = list(transform = "scale", selection = "fixed_lambda", lambda_fixed = 0.01),
+    seed = 9
+  )
+
+  expect_equal(names(res$models$all$measurement_blocks), c("extraversion", "grit"))
+  expect_equal(sort(res$models$all$measurement_blocks$grit), sort(c("gs1", "gs2", "gs3", "gs4")))
+  expect_equal(res$models$all$measurement_mode, "block_graphical")
+})
+
+test_that("measurement-aware graphical fallback still records measurement metadata", {
+  skip_if_not_installed("huge")
+
+  dat <- data.frame(
+    a1 = rep(1:5, 10),
+    a2 = rep(3, 50)
+  )
+
+  res <- engine_graphical(
+    data = dat,
+    variables = c("a1", "a2"),
+    measurement_blocks = list(alpha = c("a1", "a2")),
+    n_aug = 10,
+    engine_control = list(transform = "scale"),
+    seed = 10
+  )
+
+  expect_true(res$models$all$fallback)
+  expect_equal(res$models$all$measurement_mode, "block_graphical")
+  expect_equal(names(res$models$all$measurement_blocks), "alpha")
+})
