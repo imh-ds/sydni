@@ -115,7 +115,28 @@
 #'       \qquad
 #'       r_i \sim \mathrm{Uniform}(\{1,\ldots,R_m\}).
 #'     }
-#'     For binary targets, the sampled value is thresholded as
+#'     By default, these conditional-mean draws are converted to posterior
+#'     predictive draws by adding centered empirical residuals sampled from
+#'     \eqn{y_m - \bar{P}_m}. When no measurement blocks are supplied, the same
+#'     residual-donor row is used across targets for a synthetic observation, so
+#'     residual variation preserves cross-item covariance instead of adding
+#'     independent item-wise noise. When measurement blocks are supplied, the
+#'     donor row is shared within each block but sampled independently across
+#'     blocks, preserving measurement families while allowing between-block
+#'     relations to remain conservative. This step is important for ordinal item
+#'     batteries: without residual variation, BART can return conditional means
+#'     clustered near the middle of the response scale, and rounding can collapse
+#'     a synthesized item to a single category. With independent residual
+#'     variation, item reliabilities can be artificially damaged. The amount of
+#'     residual variation is controlled by
+#'     \code{engine_control$residual_scale}. Set
+#'     \code{engine_control$posterior_predictive = FALSE} to recover the
+#'     conditional-mean-only behavior.
+#'
+#'     For binary targets, posterior-predictive mode treats the sampled BART
+#'     value as a probability after clamping to \eqn{[0,1]} and draws a
+#'     Bernoulli outcome. If posterior-predictive mode is disabled, the sampled
+#'     value is thresholded as
 #'     \deqn{
 #'       v_{im}^{\star} =
 #'       \mathbb{I}\{\tilde{v}_{im} \ge \tau\},
@@ -160,8 +181,15 @@
 #' @param k Numeric. SYDNI shrinkage exponent. Used to scale BART regularization
 #'   as augmentation grows.
 #' @param engine_control Optional named list. Supported elements include
-#'   `num_trees`, `num_burn`, `num_draws`, `k_bart`, `power`, `base`, and
-#'   `binary_threshold`.
+#'   `num_trees`, `num_burn`, `num_draws`, `k_bart`, `power`, `base`,
+#'   `binary_threshold`, `posterior_predictive`, and `residual_scale`.
+#' @param measurement_blocks Optional named list defining item blocks whose
+#'   within-block predictors should be preserved while between-block predictors
+#'   are limited. Also accepts a `cscore::composite_list()`-style list with
+#'   `lower` and `higher` elements.
+#' @param between_block_shrink Optional numeric value in `[0, 1]`. When
+#'   `measurement_blocks` is supplied, the between-block predictor count is
+#'   `floor(predictor_k * between_block_shrink)`. Defaults to `0.50`.
 #' @param seed Numeric. Seed for reproducibility.
 #'
 #' @return A named list with elements `models` and `data`.
@@ -185,6 +213,8 @@ engine_bart <- function(
     n_aug = nrow(data),
     k = 2,
     engine_control = NULL,
+    measurement_blocks = NULL,
+    between_block_shrink = NULL,
     seed = NA
 ) {
   noise_method <- match.arg(noise_method)
@@ -228,6 +258,20 @@ engine_bart <- function(
   }
 
   predictor_k <- min(predictor_k, max(length(variables) - 1, 0))
+  normalized_blocks <- as_measurement_blocks(
+    measurement_blocks = measurement_blocks,
+    variables = variables
+  )
+  if (!is.null(normalized_blocks) && is.null(between_block_shrink)) {
+    between_block_shrink <- 0.5
+  }
+  if (!is.null(normalized_blocks)) {
+    make_block_shrinkage_matrix(
+      variables = variables,
+      measurement_blocks = normalized_blocks,
+      between_block_shrink = between_block_shrink
+    )
+  }
 
   control <- modifyList(
     list(
@@ -237,10 +281,20 @@ engine_bart <- function(
       k_bart = 2,
       power = 2,
       base = 0.95,
-      binary_threshold = 0.5
+      binary_threshold = 0.5,
+      posterior_predictive = TRUE,
+      residual_scale = 1
     ),
     engine_control
   )
+  if (
+    !is.numeric(control$residual_scale) ||
+      length(control$residual_scale) != 1 ||
+      is.na(control$residual_scale) ||
+      control$residual_scale < 0
+  ) {
+    stop("`engine_control$residual_scale` must be a single non-negative numeric value.")
+  }
 
   sampled_data <- with_seed(seed, dplyr::slice_sample(
     .data = data,
@@ -264,22 +318,61 @@ engine_bart <- function(
   effective_k <- control$k_bart * ((1 + aug_ratio) ^ k)
   effective_power <- control$power + log1p(aug_ratio)
   effective_base <- min(0.99, control$base + 0.02 * log1p(aug_ratio))
+  residual_donor_rows <- if (is.null(normalized_blocks)) {
+    with_seed(
+      seed + length(variables) + 1000L,
+      sample.int(nrow(feeder_data), size = n_aug, replace = TRUE)
+    )
+  } else {
+    stats::setNames(
+      lapply(seq_along(normalized_blocks), function(i) {
+        with_seed(
+          seed + length(variables) + 1000L + i,
+          sample.int(nrow(feeder_data), size = n_aug, replace = TRUE)
+        )
+      }),
+      names(normalized_blocks)
+    )
+  }
 
   bart_models <- stats::setNames(
     lapply(
       seq_along(variables),
       function(i) {
         target <- variables[[i]]
-        predictors <- with_seed(
-          seed + i - 1,
-          select_predictors(
-            target = target,
-            data = feeder_data,
-            variables = variables,
-            predictor_method = predictor_method,
-            predictor_k = predictor_k
+        predictor_roles <- if (is.null(normalized_blocks)) {
+          predictors <- with_seed(
+            seed + i - 1,
+            select_predictors(
+              target = target,
+              data = feeder_data,
+              variables = variables,
+              predictor_method = predictor_method,
+              predictor_k = predictor_k
+            )
           )
-        )
+          list(
+            predictors = predictors,
+            within_block_predictors = character(),
+            between_block_predictors = predictors,
+            between_k = predictor_k,
+            target_block = NA_character_
+          )
+        } else {
+          with_seed(
+            seed + i - 1,
+            select_measurement_predictors(
+              target = target,
+              data = feeder_data,
+              variables = variables,
+              predictor_method = predictor_method,
+              predictor_k = predictor_k,
+              measurement_blocks = normalized_blocks,
+              between_block_shrink = between_block_shrink
+            )
+          )
+        }
+        predictors <- predictor_roles$predictors
 
         predictor_cols <- c(predictors, covariates)
         x_frame <- make_predictor_frame(feeder_data, predictor_cols)
@@ -320,7 +413,25 @@ engine_bart <- function(
           raw <- pp[cbind(rows, seq_len(ncol(pp)))]
 
           if (binary_target) {
-            raw <- as.numeric(raw >= control$binary_threshold)
+            if (isTRUE(control$posterior_predictive)) {
+              prob <- pmin(pmax(raw, 0), 1)
+              raw <- stats::rbinom(length(prob), size = 1, prob = prob)
+            } else {
+              raw <- as.numeric(raw >= control$binary_threshold)
+            }
+          } else if (isTRUE(control$posterior_predictive)) {
+            fitted_mean <- colMeans(pp, na.rm = TRUE)
+            residuals <- y_numeric - fitted_mean
+            residuals[!is.finite(residuals)] <- 0
+            if (length(residuals) > 0 && stats::sd(residuals) > sqrt(.Machine$double.eps)) {
+              residuals <- residuals - mean(residuals)
+              donor_rows <- if (is.null(normalized_blocks)) {
+                residual_donor_rows
+              } else {
+                residual_donor_rows[[predictor_roles$target_block]]
+              }
+              raw <- raw + residuals[donor_rows] * control$residual_scale
+            }
           }
 
           reconstruct_column(raw, data[[target]])
@@ -329,7 +440,14 @@ engine_bart <- function(
         list(
           model = fit,
           value = vec,
-          predictors = predictor_cols
+          predictors = predictor_cols,
+          predictor_roles = list(
+            within_block_predictors = predictor_roles$within_block_predictors,
+            between_block_predictors = predictor_roles$between_block_predictors,
+            covariates = covariates,
+            target_block = predictor_roles$target_block,
+            between_k = predictor_roles$between_k
+          )
         )
       }
     ),
@@ -349,7 +467,20 @@ engine_bart <- function(
   }
 
   list(
-    models = purrr::map(bart_models, "model"),
+    models = if (is.null(normalized_blocks)) {
+      purrr::map(bart_models, "model")
+    } else {
+      purrr::map(bart_models, function(x) {
+        list(
+          model = x$model,
+          predictors = x$predictors,
+          predictor_roles = x$predictor_roles,
+          measurement_mode = "block_predictor_bart",
+          measurement_blocks = normalized_blocks,
+          between_block_shrink = between_block_shrink
+        )
+      })
+    },
     data = synthetic_data
   )
 }

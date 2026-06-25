@@ -109,14 +109,14 @@ parameters. Used by the `"copula"`, `"bart"`, `"factor"`, and
 
 \item{measurement_blocks}{Optional named list defining item blocks whose
 within-block correlations or measurement structure should be preserved by
-measurement-aware engines. Currently supported by the copula, factor, and
-graphical engines. Also accepts a `cscore::composite_list()`-style list
-with `lower` and `higher` elements.}
+measurement-aware engines. Currently supported by the copula, BART, factor,
+and graphical engines. Also accepts a `cscore::composite_list()`-style
+list with `lower` and `higher` elements.}
 
 \item{between_block_shrink}{Optional numeric value in `[0, 1]`. When
-`measurement_blocks` is supplied to the copula, factor, or graphical engine,
-between-block correlations are multiplied by this value. Defaults to
-`0.50`.}
+`measurement_blocks` is supplied to a measurement-aware engine,
+between-block correlations or between-block predictor counts are shrunk by
+this value. Defaults to `0.50`.}
 
 \item{seed}{Numeric. Seed controlling internal sampling, noise injection,
 predictor selection, and model fitting.}

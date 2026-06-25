@@ -562,6 +562,52 @@ select_predictors <- function(
   sample(nmi_top, size = min(predictor_k, length(nmi_top)), replace = FALSE)
 }
 
+select_measurement_predictors <- function(
+    target,
+    data,
+    variables,
+    predictor_method,
+    predictor_k,
+    measurement_blocks,
+    between_block_shrink
+) {
+  target_block <- names(Filter(function(block) target %in% block, measurement_blocks))
+  if (length(target_block) == 0) {
+    within_block_predictors <- character()
+  } else {
+    within_block_predictors <- setdiff(measurement_blocks[[target_block[[1]]]], target)
+  }
+
+  within_block_predictors <- intersect(within_block_predictors, variables)
+  between_candidates <- setdiff(variables, c(target, within_block_predictors))
+  between_k <- min(
+    length(between_candidates),
+    max(0L, as.integer(floor(predictor_k * between_block_shrink)))
+  )
+
+  between_block_predictors <- if (between_k == 0 || length(between_candidates) == 0) {
+    character()
+  } else if (identical(predictor_method, "full")) {
+    between_candidates[seq_len(between_k)]
+  } else {
+    select_predictors(
+      target = target,
+      data = data,
+      variables = c(target, between_candidates),
+      predictor_method = predictor_method,
+      predictor_k = between_k
+    )
+  }
+
+  list(
+    predictors = unique(c(within_block_predictors, between_block_predictors)),
+    within_block_predictors = within_block_predictors,
+    between_block_predictors = between_block_predictors,
+    between_k = between_k,
+    target_block = if (length(target_block) == 0) NA_character_ else target_block[[1]]
+  )
+}
+
 coerce_structural_input <- function(x) {
   if (is.factor(x) || is.ordered(x)) {
     return(as.integer(x))

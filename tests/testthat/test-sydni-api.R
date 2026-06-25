@@ -160,13 +160,66 @@ test_that("sydni forwards measurement-aware graphical arguments", {
   expect_equal(names(out$models$all$measurement_blocks), c("alpha", "beta"))
 })
 
-test_that("sydni warns about measurement arguments for unsupported engines", {
+test_that("sydni forwards measurement-aware bart arguments", {
   skip_if_not_installed("dbarts")
 
+  set.seed(20)
+  n <- 80
+  latent_a <- rnorm(n)
+  latent_b <- 0.5 * latent_a + rnorm(n, sd = 0.9)
+  df <- data.frame(
+    a1 = as.integer(cut(latent_a + rnorm(n, sd = 0.4), 5, labels = FALSE)),
+    a2 = as.integer(cut(latent_a + rnorm(n, sd = 0.4), 5, labels = FALSE)),
+    b1 = as.integer(cut(latent_b + rnorm(n, sd = 0.4), 5, labels = FALSE)),
+    b2 = as.integer(cut(latent_b + rnorm(n, sd = 0.4), 5, labels = FALSE))
+  )
+
+  out <- suppressWarnings(sydni(
+    data = df,
+    variables = names(df),
+    engine = "bart",
+    measurement_blocks = list(alpha = c("a1", "a2"), beta = c("b1", "b2")),
+    between_block_shrink = 0.25,
+    predictor_method = "full",
+    predictor_k = 2,
+    engine_control = list(num_trees = 5, num_burn = 5, num_draws = 5),
+    n_aug = 12,
+    seed = 3
+  ))
+
+  expect_equal(nrow(out$data), 12)
+  expect_equal(out$meta$between_block_shrink, 0.25)
+  expect_equal(out$models$a1$between_block_shrink, 0.25)
+  expect_equal(out$models$a1$measurement_mode, "block_predictor_bart")
+  expect_equal(names(out$models$a1$measurement_blocks), c("alpha", "beta"))
+})
+
+test_that("sydni warns about measurement arguments for unsupported engines", {
   df <- data.frame(a = rep(1:5, 2), b = rep(5:1, 2))
 
-  seen_warning <- FALSE
-  withCallingHandlers(
+  expect_warning(
+    expect_error(
+      sydni(
+        data = df,
+        variables = c("a", "b"),
+        covariates = "b",
+        engine = "brm",
+        measurement_blocks = list(alpha = c("a", "b")),
+        n_aug = 4,
+        seed = 1
+      ),
+      "both synthesized and treated as covariates"
+    ),
+    "currently used only"
+  )
+})
+
+test_that("sydni does not warn about measurement arguments for bart", {
+  skip_if_not_installed("dbarts")
+
+  df <- data.frame(a = rnorm(30), b = rnorm(30))
+
+  expect_warning(
     sydni(
       data = df,
       variables = names(df),
@@ -176,12 +229,6 @@ test_that("sydni warns about measurement arguments for unsupported engines", {
       n_aug = 4,
       seed = 1
     ),
-    warning = function(w) {
-      if (grepl("currently used only", conditionMessage(w), fixed = TRUE)) {
-        seen_warning <<- TRUE
-      }
-      invokeRestart("muffleWarning")
-    }
+    NA
   )
-  expect_true(seen_warning)
 })

@@ -21,6 +21,8 @@ engine_bart(
   n_aug = nrow(data),
   k = 2,
   engine_control = NULL,
+  measurement_blocks = NULL,
+  between_block_shrink = NULL,
   seed = NA
 )
 }
@@ -64,8 +66,17 @@ replacement.}
 as augmentation grows.}
 
 \item{engine_control}{Optional named list. Supported elements include
-`num_trees`, `num_burn`, `num_draws`, `k_bart`, `power`, `base`, and
-`binary_threshold`.}
+`num_trees`, `num_burn`, `num_draws`, `k_bart`, `power`, `base`,
+`binary_threshold`, `posterior_predictive`, and `residual_scale`.}
+
+\item{measurement_blocks}{Optional named list defining item blocks whose
+within-block predictors should be preserved while between-block predictors
+are limited. Also accepts a `cscore::composite_list()`-style list with
+`lower` and `higher` elements.}
+
+\item{between_block_shrink}{Optional numeric value in `[0, 1]`. When
+`measurement_blocks` is supplied, the between-block predictor count is
+`floor(predictor_k * between_block_shrink)`. Defaults to `0.50`.}
 
 \item{seed}{Numeric. Seed for reproducibility.}
 }
@@ -187,7 +198,28 @@ The engine proceeds in seven steps:
       \qquad
       r_i \sim \mathrm{Uniform}(\{1,\ldots,R_m\}).
     }
-    For binary targets, the sampled value is thresholded as
+    By default, these conditional-mean draws are converted to posterior
+    predictive draws by adding centered empirical residuals sampled from
+    \eqn{y_m - \bar{P}_m}. When no measurement blocks are supplied, the same
+    residual-donor row is used across targets for a synthetic observation, so
+    residual variation preserves cross-item covariance instead of adding
+    independent item-wise noise. When measurement blocks are supplied, the
+    donor row is shared within each block but sampled independently across
+    blocks, preserving measurement families while allowing between-block
+    relations to remain conservative. This step is important for ordinal item
+    batteries: without residual variation, BART can return conditional means
+    clustered near the middle of the response scale, and rounding can collapse
+    a synthesized item to a single category. With independent residual
+    variation, item reliabilities can be artificially damaged. The amount of
+    residual variation is controlled by
+    \code{engine_control$residual_scale}. Set
+    \code{engine_control$posterior_predictive = FALSE} to recover the
+    conditional-mean-only behavior.
+
+    For binary targets, posterior-predictive mode treats the sampled BART
+    value as a probability after clamping to \eqn{[0,1]} and draws a
+    Bernoulli outcome. If posterior-predictive mode is disabled, the sampled
+    value is thresholded as
     \deqn{
       v_{im}^{\star} =
       \mathbb{I}\{\tilde{v}_{im} \ge \tau\},
