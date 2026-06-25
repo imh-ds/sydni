@@ -65,12 +65,14 @@
 #'   parameters. Used by the `"copula"`, `"bart"`, `"factor"`, and
 #'   `"graphical"` engines.
 #' @param measurement_blocks Optional named list defining item blocks whose
-#'   within-block correlations should be preserved by the copula engine. Also
-#'   accepts a `cscore::composite_list()`-style list with `lower` and `higher`
-#'   elements.
+#'   within-block correlations or measurement structure should be preserved by
+#'   measurement-aware engines. Currently supported by the copula and factor
+#'   engines. Also accepts a `cscore::composite_list()`-style list with `lower`
+#'   and `higher` elements.
 #' @param between_block_shrink Optional numeric value in `[0, 1]`. When
-#'   `measurement_blocks` is supplied to the copula engine, between-block
-#'   correlations are multiplied by this value. Defaults to `0.50`.
+#'   `measurement_blocks` is supplied to the copula or factor engine,
+#'   between-block correlations are multiplied by this value. Defaults to
+#'   `0.50`.
 #' @param seed Numeric. Seed controlling internal sampling, noise injection,
 #'   predictor selection, and model fitting.
 #'
@@ -151,8 +153,8 @@ sydni <- function(
     }
   }
 
-  if (engine != "copula" && (!is.null(measurement_blocks) || !is.null(between_block_shrink))) {
-    warning("`measurement_blocks` and `between_block_shrink` are currently used only when `engine = 'copula'`.")
+  if (!engine %in% c("copula", "factor") && (!is.null(measurement_blocks) || !is.null(between_block_shrink))) {
+    warning("`measurement_blocks` and `between_block_shrink` are currently used only when `engine = 'copula'` or `engine = 'factor'`.")
   }
 
   columns <- resolve_sydni_columns(
@@ -337,6 +339,8 @@ sydni <- function(
       n_aug = n_aug,
       k = k,
       engine_control = engine_control,
+      measurement_blocks = measurement_blocks,
+      between_block_shrink = between_block_shrink,
       seed = seed
     ),
     graphical = engine_graphical(

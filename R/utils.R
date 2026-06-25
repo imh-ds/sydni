@@ -193,6 +193,72 @@ restore_within_block_correlations <- function(cor_mat, reference_cor, measuremen
   out
 }
 
+estimate_factor_item_correlation <- function(data, variables, correlation_method = "polychoric") {
+  struct_active <- as.data.frame(lapply(data[, variables, drop = FALSE], coerce_structural_input))
+
+  cor_mat <- if (identical(correlation_method, "polychoric")) {
+    tryCatch(
+      psych::polychoric(struct_active)$rho,
+      error = function(e) stats::cor(struct_active, use = "pairwise.complete.obs")
+    )
+  } else {
+    stats::cor(struct_active, use = "pairwise.complete.obs")
+  }
+
+  cor_mat <- as.matrix(cor_mat)
+  rownames(cor_mat) <- variables
+  colnames(cor_mat) <- variables
+  stabilize_correlation_matrix(cor_mat)
+}
+
+make_measurement_block_scores <- function(data, measurement_blocks) {
+  scores <- lapply(measurement_blocks, function(block) {
+    struct_block <- as.data.frame(lapply(data[, block, drop = FALSE], coerce_structural_input))
+    if (length(block) == 1) {
+      raw_score <- struct_block[[1]]
+    } else {
+      z_block <- as.data.frame(lapply(struct_block, function(x) {
+        x_sd <- stats::sd(x, na.rm = TRUE)
+        if (!is.finite(x_sd) || x_sd <= sqrt(.Machine$double.eps)) {
+          return(rep(NA_real_, length(x)))
+        }
+        as.numeric(scale(x))
+      }))
+      raw_score <- rowMeans(z_block, na.rm = TRUE)
+      raw_score[!is.finite(raw_score)] <- NA_real_
+    }
+
+    score_sd <- stats::sd(raw_score, na.rm = TRUE)
+    if (!is.finite(score_sd) || score_sd <= sqrt(.Machine$double.eps)) {
+      return(rep(0, length(raw_score)))
+    }
+    as.numeric(scale(raw_score))
+  })
+
+  out <- as.data.frame(scores)
+  names(out) <- names(measurement_blocks)
+  out
+}
+
+apply_between_block_shrinkage <- function(cor_mat, between_block_shrink = 0.5) {
+  if (
+    !is.numeric(between_block_shrink) ||
+      length(between_block_shrink) != 1 ||
+      is.na(between_block_shrink) ||
+      between_block_shrink < 0 ||
+      between_block_shrink > 1
+  ) {
+    stop("`between_block_shrink` must be a single numeric value in [0, 1].")
+  }
+
+  out <- as.matrix(cor_mat)
+  out[is.na(out)] <- 0
+  out <- (out + t(out)) / 2
+  diag(out) <- 1
+  out[row(out) != col(out)] <- out[row(out) != col(out)] * between_block_shrink
+  stabilize_correlation_matrix(out)
+}
+
 resolve_sydni_columns <- function(data, variables = NULL, covariates = NULL) {
   data_names <- names(data)
 

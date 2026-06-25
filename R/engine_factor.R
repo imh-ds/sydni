@@ -199,6 +199,15 @@
 #' @param engine_control Optional named list. Supported elements include
 #'   `n_factors`, `correlation_method`, `extraction_method`, `loading_shrink`,
 #'   `uniqueness_floor`, and `threshold_method`.
+#' @param measurement_blocks Optional named list defining item blocks whose
+#'   within-block measurement structure should be preserved while between-block
+#'   latent correlations are shrunk. Also accepts a
+#'   `cscore::composite_list()`-style list with `lower` and `higher` elements.
+#'   When supplied, v1 fits one latent factor per final measurement block and
+#'   does not apply augmentation-linked loading shrinkage within blocks.
+#' @param between_block_shrink Optional numeric value in `[0, 1]`. When
+#'   `measurement_blocks` is supplied, latent block-score correlations are
+#'   multiplied by this value. Defaults to `0.50`.
 #' @param seed Numeric. Seed for reproducibility.
 #'
 #' @return A named list with elements `models` and `data`.
@@ -218,6 +227,8 @@ engine_factor <- function(
     n_aug = nrow(data),
     k = 2,
     engine_control = NULL,
+    measurement_blocks = NULL,
+    between_block_shrink = NULL,
     seed = NA
 ) {
   noise_method <- match.arg(noise_method)
@@ -247,6 +258,14 @@ engine_factor <- function(
     engine_control
   )
 
+  normalized_blocks <- as_measurement_blocks(
+    measurement_blocks = measurement_blocks,
+    variables = variables
+  )
+  if (!is.null(normalized_blocks) && is.null(between_block_shrink)) {
+    between_block_shrink <- 0.5
+  }
+
   group_plan <- build_group_plan(
     data = data,
     variables = variables,
@@ -266,6 +285,22 @@ engine_factor <- function(
     noise_bounds = noise_bounds,
     seed = seed
   )
+
+  if (!is.null(normalized_blocks)) {
+    return(engine_factor_measurement_aware(
+      data = data,
+      variables = variables,
+      covariates = covariates,
+      round_int = round_int,
+      n_aug = n_aug,
+      control = control,
+      group_plan = group_plan,
+      feed_data = feed_data,
+      measurement_blocks = normalized_blocks,
+      between_block_shrink = between_block_shrink,
+      seed = seed
+    ))
+  }
 
   group_n <- compute_group_output_sizes(group_plan$data, n_aug)
   aug_ratio <- n_aug / nrow(data)
@@ -444,6 +479,330 @@ engine_factor <- function(
             fallback_reason = fallback_reason,
             active_variables = active_vars,
             inactive_variables = inactive_vars
+          ),
+          df = synth_df
+        )
+      }
+    ),
+    group_plan$groups
+  )
+
+  list(
+    models = purrr::map(synth_predict, "model"),
+    data = purrr::map_dfr(synth_predict, "df")
+  )
+}
+
+engine_factor_measurement_aware <- function(
+    data,
+    variables,
+    covariates,
+    round_int,
+    n_aug,
+    control,
+    group_plan,
+    feed_data,
+    measurement_blocks,
+    between_block_shrink,
+    seed
+) {
+  estimate_block_cor <- function(block_scores) {
+    block_scores <- as.data.frame(block_scores)
+    if (ncol(block_scores) == 1) {
+      out <- matrix(1, nrow = 1, ncol = 1)
+      rownames(out) <- colnames(out) <- names(block_scores)
+      return(out)
+    }
+
+    out <- stats::cor(block_scores, use = "pairwise.complete.obs")
+    out <- as.matrix(out)
+    rownames(out) <- colnames(out) <- names(block_scores)
+    stabilize_correlation_matrix(out)
+  }
+
+  fit_block_model <- function(block_name, block_vars) {
+    struct_block <- as.data.frame(lapply(data[, block_vars, drop = FALSE], coerce_structural_input))
+    active <- vapply(
+      struct_block,
+      function(x) length(unique(stats::na.omit(x))) > 1,
+      logical(1)
+    )
+    active_vars <- block_vars[active]
+    inactive_vars <- block_vars[!active]
+
+    if (length(active_vars) < 2) {
+      return(list(
+        block = block_name,
+        variables = block_vars,
+        active_variables = active_vars,
+        inactive_variables = inactive_vars,
+        loadings = NULL,
+        uniquenesses = NULL,
+        correlation = NULL,
+        factor_fit = NULL,
+        fallback = TRUE,
+        fallback_reason = "Fewer than two active items in the measurement block.",
+        measurement_model = if (length(block_vars) == 1) "singleton" else "empirical"
+      ))
+    }
+
+    cor_mat <- tryCatch(
+      estimate_factor_item_correlation(
+        data = data,
+        variables = active_vars,
+        correlation_method = control$correlation_method
+      ),
+      error = function(e) e
+    )
+
+    if (inherits(cor_mat, "error")) {
+      return(list(
+        block = block_name,
+        variables = block_vars,
+        active_variables = active_vars,
+        inactive_variables = inactive_vars,
+        loadings = NULL,
+        uniquenesses = NULL,
+        correlation = NULL,
+        factor_fit = NULL,
+        fallback = TRUE,
+        fallback_reason = conditionMessage(cor_mat),
+        measurement_model = "empirical"
+      ))
+    }
+
+    fa_result <- tryCatch(
+      psych::fa(
+        r = cor_mat,
+        nfactors = 1L,
+        n.obs = nrow(data),
+        fm = control$extraction_method,
+        rotate = "none",
+        warnings = FALSE
+      ),
+      error = function(e) e
+    )
+
+    if (inherits(fa_result, "error")) {
+      return(list(
+        block = block_name,
+        variables = block_vars,
+        active_variables = active_vars,
+        inactive_variables = inactive_vars,
+        loadings = NULL,
+        uniquenesses = NULL,
+        correlation = cor_mat,
+        factor_fit = NULL,
+        fallback = TRUE,
+        fallback_reason = conditionMessage(fa_result),
+        measurement_model = "empirical"
+      ))
+    }
+
+    loadings <- unclass(fa_result$loadings)
+    if (is.null(dim(loadings))) {
+      loadings <- matrix(loadings, ncol = 1)
+    }
+    loadings <- loadings[, 1, drop = FALSE]
+    rownames(loadings) <- active_vars
+    colnames(loadings) <- block_name
+
+    if (mean(loadings[, 1], na.rm = TRUE) < 0) {
+      loadings <- loadings * -1
+    }
+
+    uniquenesses <- fa_result$uniquenesses
+    uniquenesses <- pmin(0.99, pmax(uniquenesses, 0.01))
+    names(uniquenesses) <- active_vars
+
+    list(
+      block = block_name,
+      variables = block_vars,
+      active_variables = active_vars,
+      inactive_variables = inactive_vars,
+      loadings = loadings,
+      uniquenesses = uniquenesses,
+      correlation = cor_mat,
+      factor_fit = fa_result,
+      fallback = FALSE,
+      fallback_reason = NULL,
+      measurement_model = "one_factor"
+    )
+  }
+
+  block_models <- stats::setNames(
+    Map(fit_block_model, names(measurement_blocks), measurement_blocks),
+    names(measurement_blocks)
+  )
+
+  fallback_blocks <- names(block_models)[vapply(block_models, `[[`, logical(1), "fallback")]
+  if (length(fallback_blocks) > 0) {
+    warning(
+      paste0(
+        "The measurement-aware factor engine used empirical/singleton reconstruction for these blocks: ",
+        paste(fallback_blocks, collapse = ", "),
+        "."
+      )
+    )
+  }
+
+  global_block_scores <- make_measurement_block_scores(
+    data = data,
+    measurement_blocks = measurement_blocks
+  )
+  global_block_correlation_raw <- estimate_block_cor(global_block_scores)
+  global_block_correlation <- apply_between_block_shrinkage(
+    cor_mat = global_block_correlation_raw,
+    between_block_shrink = between_block_shrink
+  )
+
+  group_n <- compute_group_output_sizes(group_plan$data, n_aug)
+
+  synth_predict <- stats::setNames(
+    lapply(
+      seq_along(group_plan$groups),
+      function(i) {
+        group_name <- group_plan$groups[[i]]
+        data_g <- feed_data[feed_data$group_id == group_name, , drop = FALSE]
+        n_sample <- as.integer(group_n[[group_name]])
+
+        group_block_scores <- make_measurement_block_scores(
+          data = data_g,
+          measurement_blocks = measurement_blocks
+        )
+        group_block_correlation_raw <- tryCatch(
+          estimate_block_cor(group_block_scores),
+          error = function(e) global_block_correlation_raw
+        )
+        group_block_correlation_shrunk <- apply_between_block_shrinkage(
+          cor_mat = group_block_correlation_raw,
+          between_block_shrink = between_block_shrink
+        )
+        block_correlation <- shrink_cormat(
+          group_block_correlation_shrunk,
+          global_block_correlation,
+          nrow(data_g)
+        )
+        block_correlation <- stabilize_correlation_matrix(block_correlation)
+
+        latent_blocks <- with_seed(
+          seed + i - 1,
+          simulate_latent_gaussian(n_sample, block_correlation)
+        )
+        colnames(latent_blocks) <- names(measurement_blocks)
+
+        synth_df <- as.data.frame(matrix(NA, nrow = n_sample, ncol = length(variables)))
+        names(synth_df) <- variables
+
+        for (block_i in seq_along(measurement_blocks)) {
+          block_name <- names(measurement_blocks)[[block_i]]
+          block_vars <- measurement_blocks[[block_i]]
+          block_model <- block_models[[block_name]]
+          block_score <- latent_blocks[, block_name]
+
+          if (isTRUE(block_model$fallback)) {
+            for (v in block_vars) {
+              observed_nonmissing <- stats::na.omit(data_g[[v]])
+              if (length(observed_nonmissing) == 0) {
+                synth_df[[v]] <- rep(NA, n_sample)
+                next
+              }
+
+              jittered_score <- with_seed(
+                seed + 1000 + i + block_i,
+                block_score + stats::rnorm(n_sample, sd = 0.05)
+              )
+              score_sd <- stats::sd(jittered_score)
+              z_col <- if (is.finite(score_sd) && score_sd > sqrt(.Machine$double.eps)) {
+                (jittered_score - mean(jittered_score)) / score_sd
+              } else {
+                rep(0, n_sample)
+              }
+
+              synth_df[[v]] <- empirical_quantile_map(
+                u = stats::pnorm(z_col),
+                x = data_g[[v]]
+              )
+
+              if (round_int) {
+                synth_df[[v]] <- reconstruct_column(synth_df[[v]], data[[v]])
+              }
+            }
+            next
+          }
+
+          active_vars <- block_model$active_variables
+          loadings <- block_model$loadings
+          uniquenesses <- block_model$uniquenesses
+          residuals <- with_seed(
+            seed + 5000 + i + block_i,
+            matrix(
+              stats::rnorm(
+                n_sample * length(active_vars),
+                sd = rep(sqrt(uniquenesses), each = n_sample)
+              ),
+              nrow = n_sample,
+              ncol = length(active_vars)
+            )
+          )
+          latent_y <- block_score %*% t(loadings) + residuals
+          colnames(latent_y) <- active_vars
+
+          for (v in active_vars) {
+            latent_col <- latent_y[, v]
+            latent_sd <- stats::sd(latent_col)
+            z_col <- if (is.finite(latent_sd) && latent_sd > sqrt(.Machine$double.eps)) {
+              (latent_col - mean(latent_col)) / latent_sd
+            } else {
+              rep(0, length(latent_col))
+            }
+
+            synth_df[[v]] <- empirical_quantile_map(
+              u = stats::pnorm(z_col),
+              x = data_g[[v]]
+            )
+
+            if (round_int) {
+              synth_df[[v]] <- reconstruct_column(synth_df[[v]], data[[v]])
+            }
+          }
+
+          for (v in block_model$inactive_variables) {
+            observed_nonmissing <- stats::na.omit(data_g[[v]])
+            fill_value <- if (length(observed_nonmissing) == 0) NA else observed_nonmissing[[1]]
+            synth_df[[v]] <- rep(fill_value, n_sample)
+
+            if (round_int) {
+              synth_df[[v]] <- reconstruct_column(synth_df[[v]], data[[v]])
+            }
+          }
+        }
+
+        if (!is.null(covariates)) {
+          cov_row <- group_plan$data[group_plan$data$group_id == group_name, covariates, drop = FALSE][1, , drop = FALSE]
+          cov_block <- cov_row[rep(1, n_sample), , drop = FALSE]
+          synth_df <- cbind(synth_df, cov_block)
+        }
+
+        list(
+          model = list(
+            measurement_mode = "block_one_factor",
+            measurement_blocks = measurement_blocks,
+            between_block_shrink = between_block_shrink,
+            block_models = block_models,
+            block_correlation = block_correlation,
+            block_correlation_raw = group_block_correlation_raw,
+            block_correlation_global = global_block_correlation,
+            block_correlation_global_raw = global_block_correlation_raw,
+            loadings = purrr::map(block_models, "loadings"),
+            uniquenesses = purrr::map(block_models, "uniquenesses"),
+            fallback = any(vapply(block_models, `[[`, logical(1), "fallback")),
+            fallback_blocks = fallback_blocks,
+            fallback_reason = purrr::map_chr(block_models, function(x) {
+              if (is.null(x$fallback_reason)) "" else x$fallback_reason
+            }),
+            active_variables = unique(unlist(purrr::map(block_models, "active_variables"), use.names = FALSE)),
+            inactive_variables = unique(unlist(purrr::map(block_models, "inactive_variables"), use.names = FALSE))
           ),
           df = synth_df
         )

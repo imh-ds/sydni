@@ -96,3 +96,60 @@ test_that("sydni forwards measurement-aware copula arguments", {
   expect_equal(out$models$all$between_block_shrink, 0.25)
   expect_equal(names(out$models$all$measurement_blocks), c("alpha", "beta"))
 })
+
+test_that("sydni forwards measurement-aware factor arguments", {
+  skip_if_not_installed("psych")
+
+  set.seed(18)
+  n <- 100
+  latent_a <- rnorm(n)
+  latent_b <- 0.5 * latent_a + rnorm(n, sd = 0.9)
+  df <- data.frame(
+    a1 = as.integer(cut(latent_a + rnorm(n, sd = 0.4), 5, labels = FALSE)),
+    a2 = as.integer(cut(latent_a + rnorm(n, sd = 0.4), 5, labels = FALSE)),
+    b1 = as.integer(cut(latent_b + rnorm(n, sd = 0.4), 5, labels = FALSE)),
+    b2 = as.integer(cut(latent_b + rnorm(n, sd = 0.4), 5, labels = FALSE))
+  )
+
+  out <- sydni(
+    data = df,
+    variables = names(df),
+    engine = "factor",
+    measurement_blocks = list(alpha = c("a1", "a2"), beta = c("b1", "b2")),
+    between_block_shrink = 0.25,
+    n_aug = 20,
+    seed = 3
+  )
+
+  expect_equal(nrow(out$data), 20)
+  expect_equal(out$meta$between_block_shrink, 0.25)
+  expect_equal(out$models$all$between_block_shrink, 0.25)
+  expect_equal(out$models$all$measurement_mode, "block_one_factor")
+  expect_equal(names(out$models$all$measurement_blocks), c("alpha", "beta"))
+})
+
+test_that("sydni warns about measurement arguments for unsupported engines", {
+  skip_if_not_installed("dbarts")
+
+  df <- data.frame(a = rep(1:5, 2), b = rep(5:1, 2))
+
+  seen_warning <- FALSE
+  withCallingHandlers(
+    sydni(
+      data = df,
+      variables = names(df),
+      engine = "bart",
+      measurement_blocks = list(alpha = c("a", "b")),
+      engine_control = list(num_trees = 5, num_burn = 5, num_draws = 5),
+      n_aug = 4,
+      seed = 1
+    ),
+    warning = function(w) {
+      if (grepl("currently used only", conditionMessage(w), fixed = TRUE)) {
+        seen_warning <<- TRUE
+      }
+      invokeRestart("muffleWarning")
+    }
+  )
+  expect_true(seen_warning)
+})

@@ -18,6 +18,8 @@ engine_factor(
   n_aug = nrow(data),
   k = 2,
   engine_control = NULL,
+  measurement_blocks = NULL,
+  between_block_shrink = NULL,
   seed = NA
 )
 }
@@ -53,6 +55,17 @@ rows before model fitting.}
 \item{engine_control}{Optional named list. Supported elements include
 `n_factors`, `correlation_method`, `extraction_method`, `loading_shrink`,
 `uniqueness_floor`, and `threshold_method`.}
+
+\item{measurement_blocks}{Optional named list defining item blocks whose
+within-block measurement structure should be preserved while between-block
+latent correlations are shrunk. Also accepts a
+`cscore::composite_list()`-style list with `lower` and `higher` elements.
+When supplied, v1 fits one latent factor per final measurement block and
+does not apply augmentation-linked loading shrinkage within blocks.}
+
+\item{between_block_shrink}{Optional numeric value in `[0, 1]`. When
+`measurement_blocks` is supplied, latent block-score correlations are
+multiplied by this value. Defaults to `0.50`.}
 
 \item{seed}{Numeric. Seed for reproducibility.}
 }
