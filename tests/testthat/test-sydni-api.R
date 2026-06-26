@@ -194,7 +194,7 @@ test_that("sydni forwards measurement-aware bart arguments", {
   expect_equal(names(out$models$a1$measurement_blocks), c("alpha", "beta"))
 })
 
-test_that("sydni warns about measurement arguments for unsupported engines", {
+test_that("sydni does not warn about measurement arguments for brm validation errors", {
   df <- data.frame(a = rep(1:5, 2), b = rep(5:1, 2))
 
   expect_warning(
@@ -210,8 +210,50 @@ test_that("sydni warns about measurement arguments for unsupported engines", {
       ),
       "both synthesized and treated as covariates"
     ),
-    "currently used only"
+    NA
   )
+})
+
+test_that("sydni forwards measurement-aware brm arguments", {
+  df <- data.frame(
+    a1 = rnorm(24),
+    a2 = rnorm(24),
+    b1 = rnorm(24)
+  )
+  captured <- NULL
+  testthat::local_mocked_bindings(
+    engine_brm = function(...) {
+      captured <<- list(...)
+      list(
+        models = list(a1 = list(
+          measurement_mode = "block_predictor_brm",
+          between_block_shrink = captured$between_block_shrink,
+          measurement_blocks = captured$measurement_blocks
+        )),
+        data = captured$data[seq_len(captured$n_aug), captured$variables, drop = FALSE]
+      )
+    }
+  )
+
+  out <- sydni(
+    data = df,
+    variables = names(df),
+    engine = "brm",
+    measurement_blocks = list(alpha = c("a1", "a2"), beta = "b1"),
+    between_block_shrink = 0,
+    predictor_method = "full",
+    predictor_k = 2,
+    n_aug = 4,
+    seed = 4
+  )
+
+  expect_equal(nrow(out$data), 4)
+  expect_equal(out$meta$between_block_shrink, 0)
+  expect_equal(captured$between_block_shrink, 0)
+  expect_equal(names(captured$measurement_blocks), c("alpha", "beta"))
+  expect_equal(out$models$a1$between_block_shrink, 0)
+  expect_equal(out$models$a1$measurement_mode, "block_predictor_brm")
+  expect_equal(names(out$models$a1$measurement_blocks), c("alpha", "beta"))
 })
 
 test_that("sydni does not warn about measurement arguments for bart", {

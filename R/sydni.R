@@ -66,9 +66,9 @@
 #'   `"graphical"` engines.
 #' @param measurement_blocks Optional named list defining item blocks whose
 #'   within-block correlations or measurement structure should be preserved by
-#'   measurement-aware engines. Currently supported by the copula, BART, factor,
-#'   and graphical engines. Also accepts a `cscore::composite_list()`-style
-#'   list with `lower` and `higher` elements.
+#'   measurement-aware engines. Currently supported by the BRM, copula, BART,
+#'   factor, and graphical engines. Also accepts a
+#'   `cscore::composite_list()`-style list with `lower` and `higher` elements.
 #' @param between_block_shrink Optional numeric value in `[0, 1]`. When
 #'   `measurement_blocks` is supplied to a measurement-aware engine,
 #'   between-block correlations or between-block predictor counts are shrunk by
@@ -151,10 +151,6 @@ sydni <- function(
     if (is.null(cmdstanr::cmdstan_version(error_on_NA = FALSE))) {
       stop("CmdStan must be installed and configured for backend = 'cmdstanr'.")
     }
-  }
-
-  if (!engine %in% c("copula", "bart", "factor", "graphical") && (!is.null(measurement_blocks) || !is.null(between_block_shrink))) {
-    warning("`measurement_blocks` and `between_block_shrink` are currently used only when `engine = 'copula'`, `engine = 'bart'`, `engine = 'factor'`, or `engine = 'graphical'`.")
   }
 
   columns <- resolve_sydni_columns(
@@ -288,7 +284,9 @@ sydni <- function(
       thin = thin,
       algorithm = algorithm,
       seed = seed,
-      backend = backend
+      backend = backend,
+      measurement_blocks = measurement_blocks,
+      between_block_shrink = between_block_shrink
     ),
     copula = engine_copula(
       data = data,

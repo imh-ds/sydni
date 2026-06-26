@@ -109,9 +109,9 @@ parameters. Used by the `"copula"`, `"bart"`, `"factor"`, and
 
 \item{measurement_blocks}{Optional named list defining item blocks whose
 within-block correlations or measurement structure should be preserved by
-measurement-aware engines. Currently supported by the copula, BART, factor,
-and graphical engines. Also accepts a `cscore::composite_list()`-style
-list with `lower` and `higher` elements.}
+measurement-aware engines. Currently supported by the BRM, copula, BART,
+factor, and graphical engines. Also accepts a
+`cscore::composite_list()`-style list with `lower` and `higher` elements.}
 
 \item{between_block_shrink}{Optional numeric value in `[0, 1]`. When
 `measurement_blocks` is supplied to a measurement-aware engine,

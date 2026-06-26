@@ -150,7 +150,7 @@ results <- sydni(
     data = sdata,
     variables = vars,
     covariates = covars,
-    engine = "bart",
+    engine = "brm",
     n_aug = nrow(cdata)-nrow(sdata),
     families = families,
     # predictor_k = 2,

@@ -138,6 +138,15 @@
 #'     factors are mapped back to valid levels, integer-like outcomes are
 #'     rounded and clamped to the observed range, and continuous numeric
 #'     outcomes are clamped to the observed range.
+#'
+#'     For Gaussian numeric targets, SYDNI instead draws from
+#'     \code{brms::posterior_epred()} and adds centered empirical residuals.
+#'     The residual donor row is shared across all targets when
+#'     \code{measurement_blocks = NULL}; when measurement blocks are supplied,
+#'     it is shared within each block and sampled independently across blocks.
+#'     This preserves residual covariance within item batteries and avoids the
+#'     reliability loss that can occur when each item receives independent
+#'     posterior-predictive noise.
 #' }
 #'
 #' The final synthetic dataset is assembled column-wise as
@@ -186,6 +195,14 @@
 #' @param thin Integer. Thinning interval.
 #' @param algorithm String. `brms` algorithm to use.
 #' @param backend Character. One of `"rstan"` or `"cmdstanr"`.
+#' @param measurement_blocks Optional named list defining item blocks whose
+#'   within-block predictors should be preserved while between-block predictors
+#'   are limited. Also accepts a `cscore::composite_list()`-style list with
+#'   `lower` and `higher` elements.
+#' @param between_block_shrink Optional numeric value in `[0, 1]`. When
+#'   `measurement_blocks` is supplied, the between-block predictor count is
+#'   `floor(predictor_k * between_block_shrink)` and between-block priors are
+#'   tightened by the same multiplier. Defaults to `0.50`.
 #' @param seed Numeric. Seed for reproducibility.
 #'
 #' @return A named list with elements `models` and `data`.
@@ -218,6 +235,8 @@ engine_brm <- function(
     thin = 2,
     algorithm = c("fullrank", "meanfield", "sampling", "pathfinder", "laplace", "fixed_param"),
     backend = c("rstan", "cmdstanr"),
+    measurement_blocks = NULL,
+    between_block_shrink = NULL,
     seed = NA
 ) {
   noise_method <- match.arg(noise_method)
@@ -245,35 +264,19 @@ engine_brm <- function(
   }
 
   predictor_k <- min(predictor_k, max(length(variables) - 1, 0))
-
-  make_predictors <- function(target, training_data) {
-    others <- setdiff(variables, target)
-
-    if (length(others) == 0) {
-      return(character())
-    }
-
-    if (predictor_method == "full") {
-      return(others)
-    }
-
-    if (predictor_method == "random") {
-      return(sample(others, predictor_k, replace = FALSE))
-    }
-
-    nmi_values <- normalized_mi_scores(
-      target = target,
-      data = training_data,
-      variables = variables
+  normalized_blocks <- as_measurement_blocks(
+    measurement_blocks = measurement_blocks,
+    variables = variables
+  )
+  if (!is.null(normalized_blocks) && is.null(between_block_shrink)) {
+    between_block_shrink <- 0.5
+  }
+  if (!is.null(normalized_blocks)) {
+    make_block_shrinkage_matrix(
+      variables = variables,
+      measurement_blocks = normalized_blocks,
+      between_block_shrink = between_block_shrink
     )
-    nmi_sorted <- sort(nmi_values, decreasing = TRUE)
-
-    if (predictor_method == "information") {
-      return(names(nmi_sorted)[seq_len(min(predictor_k, length(nmi_sorted)))])
-    }
-
-    nmi_top <- names(nmi_sorted)[seq_len(min(predictor_k * 5, length(nmi_sorted)))]
-    sample(nmi_top, size = min(predictor_k, length(nmi_top)), replace = FALSE)
   }
 
   sampled_data <- with_seed(seed, dplyr::slice_sample(
@@ -300,18 +303,55 @@ engine_brm <- function(
     manual_families = families
   )
 
-  formulas <- with_seed(seed, stats::setNames(
+  formula_info <- with_seed(seed, stats::setNames(
     lapply(
-      variables,
-      function(target) {
-        predictors <- make_predictors(target, data)
+      seq_along(variables),
+      function(i) {
+        target <- variables[[i]]
+        predictor_roles <- if (is.null(normalized_blocks)) {
+          predictors <- with_seed(
+            seed + i - 1,
+            select_predictors(
+              target = target,
+              data = data,
+              variables = variables,
+              predictor_method = predictor_method,
+              predictor_k = predictor_k
+            )
+          )
+          list(
+            predictors = predictors,
+            within_block_predictors = character(),
+            between_block_predictors = predictors,
+            between_k = predictor_k,
+            target_block = NA_character_
+          )
+        } else {
+          with_seed(
+            seed + i - 1,
+            select_measurement_predictors(
+              target = target,
+              data = data,
+              variables = variables,
+              predictor_method = predictor_method,
+              predictor_k = predictor_k,
+              measurement_blocks = normalized_blocks,
+              between_block_shrink = between_block_shrink
+            )
+          )
+        }
+        predictors <- predictor_roles$predictors
         rhs_terms <- c(predictors, covariates)
         rhs <- if (length(rhs_terms) == 0) "1" else paste(rhs_terms, collapse = " + ")
-        stats::as.formula(paste0(target, " ~ ", rhs))
+        list(
+          formula = stats::as.formula(paste0(target, " ~ ", rhs)),
+          predictor_roles = predictor_roles
+        )
       }
     ),
     variables
   ))
+  formulas <- purrr::map(formula_info, "formula")
 
   pb <- progress::progress_bar$new(
     format = "  Generating Data [:bar] :percent ETA: :eta",
@@ -326,6 +366,22 @@ engine_brm <- function(
     base_sd = base_sd,
     k = k
   )
+  residual_donor_rows <- if (is.null(normalized_blocks)) {
+    with_seed(
+      seed + length(variables) + 1000L,
+      sample.int(nrow(data), size = n_aug, replace = TRUE)
+    )
+  } else {
+    stats::setNames(
+      lapply(seq_along(normalized_blocks), function(i) {
+        with_seed(
+          seed + length(variables) + 1000L + i,
+          sample.int(nrow(data), size = n_aug, replace = TRUE)
+        )
+      }),
+      names(normalized_blocks)
+    )
+  }
 
   brm_models <- stats::setNames(
     lapply(
@@ -348,12 +404,34 @@ engine_brm <- function(
           utils::flush.console()
         }
 
+        prior_info <- if (is.null(normalized_blocks)) {
+          list(
+            priors = b_shrinkage,
+            meta = list(
+              prior_mode = "global",
+              same_block_sd = NA_real_,
+              between_block_sd = NA_real_,
+              covariate_sd = NA_real_,
+              fallback_terms = character()
+            )
+          )
+        } else {
+          make_brm_role_priors(
+            data = data,
+            predictor_roles = formula_info[[v]]$predictor_roles,
+            covariates = covariates,
+            base_sd = base_sd,
+            shrink_sd = base_sd / (1 + n_aug / nrow(data))^k,
+            between_block_shrink = between_block_shrink
+          )
+        }
+
         model <- with_seed(seed + i - 1, suppressMessages(
           quiet_brm(
             formula = formulas[[v]],
             data = data,
             family = variable_families[[v]],
-            prior = c(b_shrinkage, intercept_prior),
+            prior = if (is.null(prior_info$priors)) intercept_prior else c(prior_info$priors, intercept_prior),
             chains = chains,
             cores = if (identical(cores, "auto")) parallel::detectCores() - 1 else cores,
             iter = iter,
@@ -372,18 +450,49 @@ engine_brm <- function(
             dplyr::all_of(all.vars(formulas[[v]])[-1])
           )
 
-        pp <- brms::posterior_predict(model, newdata = preds)
-        vec <- with_seed(seed + length(variables) + i - 1, sample_posterior_column(
-          pp = pp,
-          template = data[[v]],
-          family = variable_families[[v]]
-        ))
+        gaussian_numeric_target <- identical(variable_families[[v]]$family, "gaussian") &&
+          (is.numeric(data[[v]]) || is.integer(data[[v]]))
+        vec <- if (gaussian_numeric_target) {
+          train_preds <- data |>
+            dplyr::select(
+              dplyr::all_of(all.vars(formulas[[v]])[-1])
+            )
+          epred_new <- brms::posterior_epred(model, newdata = preds)
+          epred_train <- brms::posterior_epred(model, newdata = train_preds)
+          donor_rows <- if (is.null(normalized_blocks)) {
+            residual_donor_rows
+          } else {
+            residual_donor_rows[[formula_info[[v]]$predictor_roles$target_block]]
+          }
+          with_seed(seed + length(variables) + i - 1, sample_coherent_gaussian_epred_column(
+            epred_new = epred_new,
+            epred_train = epred_train,
+            y_train = data[[v]],
+            template = data[[v]],
+            donor_rows = donor_rows
+          ))
+        } else {
+          pp <- brms::posterior_predict(model, newdata = preds)
+          with_seed(seed + length(variables) + i - 1, sample_posterior_column(
+            pp = pp,
+            template = data[[v]],
+            family = variable_families[[v]]
+          ))
+        }
 
         pb$tick()
 
         list(
           model = model,
-          value = vec
+          value = vec,
+          predictor_roles = list(
+            within_block_predictors = formula_info[[v]]$predictor_roles$within_block_predictors,
+            between_block_predictors = formula_info[[v]]$predictor_roles$between_block_predictors,
+            covariates = covariates,
+            target_block = formula_info[[v]]$predictor_roles$target_block,
+            between_k = formula_info[[v]]$predictor_roles$between_k
+          ),
+          prior_roles = prior_info$meta
         )
       }
     ),
@@ -395,7 +504,20 @@ engine_brm <- function(
     variables
   )
 
-  synth_models <- purrr::map(brm_models, "model")
+  synth_models <- if (is.null(normalized_blocks)) {
+    purrr::map(brm_models, "model")
+  } else {
+    purrr::map(brm_models, function(x) {
+      list(
+        model = x$model,
+        predictor_roles = x$predictor_roles,
+        prior_roles = x$prior_roles,
+        measurement_mode = "block_predictor_brm",
+        measurement_blocks = normalized_blocks,
+        between_block_shrink = between_block_shrink
+      )
+    })
+  }
 
   if (!is.null(covariates)) {
     synthetic_data <- cbind(

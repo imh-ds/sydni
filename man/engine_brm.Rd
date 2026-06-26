@@ -31,6 +31,8 @@ engine_brm(
   algorithm = c("fullrank", "meanfield", "sampling", "pathfinder", "laplace",
     "fixed_param"),
   backend = c("rstan", "cmdstanr"),
+  measurement_blocks = NULL,
+  between_block_shrink = NULL,
   seed = NA
 )
 }
@@ -91,6 +93,16 @@ replacement.}
 \item{algorithm}{String. `brms` algorithm to use.}
 
 \item{backend}{Character. One of `"rstan"` or `"cmdstanr"`.}
+
+\item{measurement_blocks}{Optional named list defining item blocks whose
+within-block predictors should be preserved while between-block predictors
+are limited. Also accepts a `cscore::composite_list()`-style list with
+`lower` and `higher` elements.}
+
+\item{between_block_shrink}{Optional numeric value in `[0, 1]`. When
+`measurement_blocks` is supplied, the between-block predictor count is
+`floor(predictor_k * between_block_shrink)` and between-block priors are
+tightened by the same multiplier. Defaults to `0.50`.}
 
 \item{seed}{Numeric. Seed for reproducibility.}
 }
@@ -235,6 +247,15 @@ The engine proceeds in six steps:
     factors are mapped back to valid levels, integer-like outcomes are
     rounded and clamped to the observed range, and continuous numeric
     outcomes are clamped to the observed range.
+
+    For Gaussian numeric targets, SYDNI instead draws from
+    \code{brms::posterior_epred()} and adds centered empirical residuals.
+    The residual donor row is shared across all targets when
+    \code{measurement_blocks = NULL}; when measurement blocks are supplied,
+    it is shared within each block and sampled independently across blocks.
+    This preserves residual covariance within item batteries and avoids the
+    reliability loss that can occur when each item receives independent
+    posterior-predictive noise.
 }
 
 The final synthetic dataset is assembled column-wise as

@@ -608,6 +608,89 @@ select_measurement_predictors <- function(
   )
 }
 
+is_brm_coefficient_prior_safe <- function(data, term) {
+  if (!term %in% names(data)) {
+    return(FALSE)
+  }
+
+  x <- data[[term]]
+  (is.numeric(x) || is.integer(x) || is.logical(x)) && identical(make.names(term), term)
+}
+
+make_brm_role_priors <- function(
+    data,
+    predictor_roles,
+    covariates,
+    base_sd,
+    shrink_sd,
+    between_block_shrink
+) {
+  rhs_terms <- c(
+    predictor_roles$within_block_predictors,
+    predictor_roles$between_block_predictors,
+    covariates
+  )
+  rhs_terms <- unique(rhs_terms)
+
+  unsafe_terms <- rhs_terms[
+    !vapply(rhs_terms, function(term) is_brm_coefficient_prior_safe(data, term), logical(1))
+  ]
+
+  if (length(unsafe_terms) > 0) {
+    return(list(
+      priors = do.call(brms::prior, list(
+        prior = bquote(normal(0, .(shrink_sd))),
+        class = "b"
+      )),
+      meta = list(
+        prior_mode = "global_fallback",
+        same_block_sd = NA_real_,
+        between_block_sd = NA_real_,
+        covariate_sd = NA_real_,
+        fallback_terms = unsafe_terms
+      )
+    ))
+  }
+
+  same_block_sd <- base_sd
+  between_block_sd <- shrink_sd * between_block_shrink
+  covariate_sd <- shrink_sd
+
+  priors <- list()
+  for (term in predictor_roles$within_block_predictors) {
+    priors[[length(priors) + 1L]] <- do.call(brms::prior, list(
+      prior = bquote(normal(0, .(same_block_sd))),
+      class = "b",
+      coef = term
+    ))
+  }
+  for (term in predictor_roles$between_block_predictors) {
+    priors[[length(priors) + 1L]] <- do.call(brms::prior, list(
+      prior = bquote(normal(0, .(between_block_sd))),
+      class = "b",
+      coef = term
+    ))
+  }
+  for (term in covariates) {
+    priors[[length(priors) + 1L]] <- do.call(brms::prior, list(
+      prior = bquote(normal(0, .(covariate_sd))),
+      class = "b",
+      coef = term
+    ))
+  }
+
+  list(
+    priors = if (length(priors) == 0) NULL else do.call(c, priors),
+    meta = list(
+      prior_mode = "role_specific",
+      same_block_sd = same_block_sd,
+      between_block_sd = between_block_sd,
+      covariate_sd = covariate_sd,
+      fallback_terms = character()
+    )
+  )
+}
+
 coerce_structural_input <- function(x) {
   if (is.factor(x) || is.ordered(x)) {
     return(as.integer(x))
@@ -793,6 +876,33 @@ sample_posterior_column <- function(pp, template, family = NULL) {
   vec <- pp[cbind(rows, seq_len(ncol_pp))]
 
   reconstruct_column(vec, template, family = family)
+}
+
+sample_coherent_gaussian_epred_column <- function(
+    epred_new,
+    epred_train,
+    y_train,
+    template,
+    donor_rows,
+    residual_scale = 1
+) {
+  if (length(dim(epred_new)) != 2 || length(dim(epred_train)) != 2) {
+    stop("`epred_new` and `epred_train` must be posterior expectation matrices.")
+  }
+
+  rows <- sample.int(nrow(epred_new), ncol(epred_new), replace = TRUE)
+  raw <- epred_new[cbind(rows, seq_len(ncol(epred_new)))]
+
+  fitted_mean <- colMeans(epred_train, na.rm = TRUE)
+  residuals <- as.numeric(y_train) - fitted_mean
+  residuals[!is.finite(residuals)] <- 0
+
+  if (length(residuals) > 0 && stats::sd(residuals) > sqrt(.Machine$double.eps)) {
+    residuals <- residuals - mean(residuals)
+    raw <- raw + residuals[donor_rows] * residual_scale
+  }
+
+  reconstruct_column(raw, template)
 }
 
 reconstruct_column <- function(values, template, family = NULL) {
