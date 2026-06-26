@@ -15,6 +15,15 @@
 #' when the analyst wants explicit conditional relationships among variables and
 #' wants the fitted models to remain inspectable through \pkg{brms}.
 #'
+#' When \code{measurement_blocks} is supplied, BRM switches to a
+#' measurement-aware block-score donor path. Instead of fitting one model per
+#' item, SYDNI computes leaf measurement-block scores, combines them into
+#' structural family scores, fits BRM models at that structural score layer, and
+#' reconstructs item responses by copying coherent observed item blocks from
+#' nearest observed leaf-score donors. This path is designed for psychometric
+#' augmentation where within-scale reliability should be preserved while
+#' between-construct relations are made conservative.
+#'
 #' Let \eqn{D = \{x_i\}_{i=1}^{n_{\mathrm{obs}}}} be the observed data,
 #' \eqn{V = \{v_1,\ldots,v_p\}} be the synthesized variables, and
 #' \eqn{C = \{c_1,\ldots,c_q\}} be optional covariates. The requested synthetic
@@ -24,12 +33,15 @@
 #'
 #' \enumerate{
 #'   \item Draw a feeder sample \eqn{\tilde{D}} of size
-#'     \eqn{n_{\mathrm{aug}}} from \eqn{D} using \code{dplyr::slice_sample()}:
+#'     \eqn{n_{\mathrm{aug}}} from \eqn{D} by sampling observed row indices:
 #'     \deqn{
 #'       \tilde{D} = \{x_{s_i}: s_i \sim
 #'       \mathrm{Uniform}(\{1,\ldots,n_{\mathrm{obs}}\})\}_{i=1}^{n_{\mathrm{aug}}}.
 #'     }
 #'     If \code{replace = FALSE}, the indices are sampled without replacement.
+#'     The sampled indices are retained internally so Gaussian residual donors
+#'     and measurement-aware same-block predictors can be aligned to the same
+#'     bootstrap row.
 #'
 #'   \item Inject noise into the synthesized columns of \eqn{\tilde{D}} to form
 #'     the feeder data \eqn{\tilde{D}_{\varepsilon}}. Covariates are not
@@ -139,14 +151,37 @@
 #'     rounded and clamped to the observed range, and continuous numeric
 #'     outcomes are clamped to the observed range.
 #'
-#'     For Gaussian numeric targets, SYDNI instead draws from
-#'     \code{brms::posterior_epred()} and adds centered empirical residuals.
-#'     The residual donor row is shared across all targets when
-#'     \code{measurement_blocks = NULL}; when measurement blocks are supplied,
-#'     it is shared within each block and sampled independently across blocks.
-#'     This preserves residual covariance within item batteries and avoids the
-#'     reliability loss that can occur when each item receives independent
-#'     posterior-predictive noise.
+#'     For Gaussian numeric targets in the legacy item-wise path, SYDNI instead
+#'     draws from \code{brms::posterior_epred()} and adds centered empirical
+#'     residuals. The residual donor row is aligned to the clean bootstrap row
+#'     used for the feeder sample, which preserves residual covariance better
+#'     than fully independent posterior-predictive draws.
+#' }
+#'
+#' With \code{measurement_blocks}, the item-wise workflow above is replaced by
+#' a three-stage block-score workflow:
+#'
+#' \enumerate{
+#'   \item Normalize measurement structure. Plain named lists are treated as
+#'     both leaf item blocks and structural families. For
+#'     \code{cscore::composite_list()}-style inputs, lower-order item batteries
+#'     become leaf blocks, higher-order composites become structural families,
+#'     and composites whose items are not synthesized are ignored.
+#'
+#'   \item Fit BRM models to structural family scores. Leaf scores are
+#'     standardized item-block means; higher-order family scores are
+#'     standardized means of their leaf scores. BRM fits one Gaussian model per
+#'     structural family score, using other family scores and covariates as
+#'     predictors. The \code{between_block_shrink} value limits between-family
+#'     predictor counts and tightens between-family slope priors.
+#'
+#'   \item Reconstruct item-level data. Synthetic structural family scores are
+#'     expanded to leaf scores using the observed within-family leaf-score
+#'     covariance, without shrinkage inside the family. Each synthetic leaf
+#'     score then selects a nearest observed donor row, and the full observed
+#'     item block is copied from that donor. This preserves valid response
+#'     support and protects within-block item covariance, including two-item
+#'     scales where Cronbach's alpha is especially sensitive.
 #' }
 #'
 #' The final synthetic dataset is assembled column-wise as
@@ -156,8 +191,11 @@
 #' }
 #' where \eqn{C_{\mathrm{feeder}}} is included only when \code{covariates} are
 #' supplied. The returned \code{models} element contains the fitted \pkg{brms}
-#' model for each synthesized target, and the returned \code{data} element
-#' contains \eqn{D^{\star}}.
+#' model for each synthesized target in the legacy path. In the
+#' measurement-aware path, \code{models$all} stores the structural-family BRM
+#' models, measurement plan, predictor roles, donor settings, and ignored
+#' non-synthesized composites. The returned \code{data} element always contains
+#' item-level synthetic rows.
 #'
 #' The BRM engine should be interpreted as a robustness and sensitivity-analysis
 #' engine. It does not make synthetic rows into additional empirical evidence,
@@ -195,13 +233,14 @@
 #' @param thin Integer. Thinning interval.
 #' @param algorithm String. `brms` algorithm to use.
 #' @param backend Character. One of `"rstan"` or `"cmdstanr"`.
-#' @param measurement_blocks Optional named list defining item blocks whose
-#'   within-block predictors should be preserved while between-block predictors
-#'   are limited. Also accepts a `cscore::composite_list()`-style list with
-#'   `lower` and `higher` elements.
+#' @param measurement_blocks Optional named list or
+#'   `cscore::composite_list()`-style list. When supplied, BRM uses the
+#'   measurement-aware block-score donor path: lower-order item batteries are
+#'   preserved as donor-reconstructed leaf blocks and higher-order composites
+#'   define structural score families when available.
 #' @param between_block_shrink Optional numeric value in `[0, 1]`. When
-#'   `measurement_blocks` is supplied, the between-block predictor count is
-#'   `floor(predictor_k * between_block_shrink)` and between-block priors are
+#'   `measurement_blocks` is supplied, the between-family predictor count is
+#'   `floor(predictor_k * between_block_shrink)` and between-family priors are
 #'   tightened by the same multiplier. Defaults to `0.50`.
 #' @param seed Numeric. Seed for reproducibility.
 #'
@@ -256,6 +295,62 @@ engine_brm <- function(
     stop("`variables` must contain at least one synthesized column.")
   }
 
+  if (!is.null(measurement_blocks)) {
+    measurement_plan <- make_brm_measurement_plan(
+      measurement_blocks = measurement_blocks,
+      variables = variables
+    )
+    if (is.null(between_block_shrink)) {
+      between_block_shrink <- 0.5
+    }
+    if (
+      !is.numeric(between_block_shrink) ||
+        length(between_block_shrink) != 1 ||
+        is.na(between_block_shrink) ||
+        between_block_shrink < 0 ||
+        between_block_shrink > 1
+    ) {
+      stop("`between_block_shrink` must be a single numeric value in [0, 1].")
+    }
+
+    n_score_predictors <- max(length(measurement_plan$family_names) - 1L, 0L)
+    if (is.null(predictor_k)) {
+      predictor_k <- if (n_score_predictors == 0L) 0L else max(1L, round(n_score_predictors / 3))
+      message(
+        paste0("Predictor k not specified. Defaulting to ", predictor_k, ".")
+      )
+    }
+    predictor_k <- min(predictor_k, n_score_predictors)
+
+    return(engine_brm_block_score(
+      data = data,
+      variables = variables,
+      covariates = covariates,
+      measurement_plan = measurement_plan,
+      between_block_shrink = between_block_shrink,
+      predictor_method = predictor_method,
+      predictor_k = predictor_k,
+      replace = replace,
+      n_aug = n_aug,
+      base_sd = base_sd,
+      sd_scale = sd_scale,
+      k = k,
+      chains = chains,
+      cores = cores,
+      iter = iter,
+      warmup = warmup,
+      thin = thin,
+      algorithm = algorithm,
+      backend = backend,
+      seed = seed
+    ))
+  }
+
+  warning(
+    "`engine = 'brm'` is running without `measurement_blocks`; psychometric block-score protection is not active.",
+    call. = FALSE
+  )
+
   if (is.null(predictor_k)) {
     predictor_k <- max(1, round((length(variables) - 1) / 3))
     message(
@@ -264,26 +359,12 @@ engine_brm <- function(
   }
 
   predictor_k <- min(predictor_k, max(length(variables) - 1, 0))
-  normalized_blocks <- as_measurement_blocks(
-    measurement_blocks = measurement_blocks,
-    variables = variables
-  )
-  if (!is.null(normalized_blocks) && is.null(between_block_shrink)) {
-    between_block_shrink <- 0.5
-  }
-  if (!is.null(normalized_blocks)) {
-    make_block_shrinkage_matrix(
-      variables = variables,
-      measurement_blocks = normalized_blocks,
-      between_block_shrink = between_block_shrink
-    )
-  }
 
-  sampled_data <- with_seed(seed, dplyr::slice_sample(
-    .data = data,
-    replace = replace,
-    n = n_aug
-  ))
+  sampled_indices <- with_seed(
+    seed,
+    sample.int(nrow(data), size = n_aug, replace = replace)
+  )
+  sampled_data <- data[sampled_indices, , drop = FALSE]
 
   feeder_data <- add_noise(
     data = sampled_data,
@@ -308,38 +389,23 @@ engine_brm <- function(
       seq_along(variables),
       function(i) {
         target <- variables[[i]]
-        predictor_roles <- if (is.null(normalized_blocks)) {
-          predictors <- with_seed(
-            seed + i - 1,
-            select_predictors(
-              target = target,
-              data = data,
-              variables = variables,
-              predictor_method = predictor_method,
-              predictor_k = predictor_k
-            )
+        predictors <- with_seed(
+          seed + i - 1,
+          select_predictors(
+            target = target,
+            data = data,
+            variables = variables,
+            predictor_method = predictor_method,
+            predictor_k = predictor_k
           )
-          list(
-            predictors = predictors,
-            within_block_predictors = character(),
-            between_block_predictors = predictors,
-            between_k = predictor_k,
-            target_block = NA_character_
-          )
-        } else {
-          with_seed(
-            seed + i - 1,
-            select_measurement_predictors(
-              target = target,
-              data = data,
-              variables = variables,
-              predictor_method = predictor_method,
-              predictor_k = predictor_k,
-              measurement_blocks = normalized_blocks,
-              between_block_shrink = between_block_shrink
-            )
-          )
-        }
+        )
+        predictor_roles <- list(
+          predictors = predictors,
+          within_block_predictors = character(),
+          between_block_predictors = predictors,
+          between_k = predictor_k,
+          target_block = NA_character_
+        )
         predictors <- predictor_roles$predictors
         rhs_terms <- c(predictors, covariates)
         rhs <- if (length(rhs_terms) == 0) "1" else paste(rhs_terms, collapse = " + ")
@@ -366,22 +432,7 @@ engine_brm <- function(
     base_sd = base_sd,
     k = k
   )
-  residual_donor_rows <- if (is.null(normalized_blocks)) {
-    with_seed(
-      seed + length(variables) + 1000L,
-      sample.int(nrow(data), size = n_aug, replace = TRUE)
-    )
-  } else {
-    stats::setNames(
-      lapply(seq_along(normalized_blocks), function(i) {
-        with_seed(
-          seed + length(variables) + 1000L + i,
-          sample.int(nrow(data), size = n_aug, replace = TRUE)
-        )
-      }),
-      names(normalized_blocks)
-    )
-  }
+  residual_donor_rows <- sampled_indices
 
   brm_models <- stats::setNames(
     lapply(
@@ -404,27 +455,16 @@ engine_brm <- function(
           utils::flush.console()
         }
 
-        prior_info <- if (is.null(normalized_blocks)) {
-          list(
-            priors = b_shrinkage,
-            meta = list(
-              prior_mode = "global",
-              same_block_sd = NA_real_,
-              between_block_sd = NA_real_,
-              covariate_sd = NA_real_,
-              fallback_terms = character()
-            )
+        prior_info <- list(
+          priors = b_shrinkage,
+          meta = list(
+            prior_mode = "global",
+            same_block_sd = NA_real_,
+            between_block_sd = NA_real_,
+            covariate_sd = NA_real_,
+            fallback_terms = character()
           )
-        } else {
-          make_brm_role_priors(
-            data = data,
-            predictor_roles = formula_info[[v]]$predictor_roles,
-            covariates = covariates,
-            base_sd = base_sd,
-            shrink_sd = base_sd / (1 + n_aug / nrow(data))^k,
-            between_block_shrink = between_block_shrink
-          )
-        }
+        )
 
         model <- with_seed(seed + i - 1, suppressMessages(
           quiet_brm(
@@ -459,17 +499,12 @@ engine_brm <- function(
             )
           epred_new <- brms::posterior_epred(model, newdata = preds)
           epred_train <- brms::posterior_epred(model, newdata = train_preds)
-          donor_rows <- if (is.null(normalized_blocks)) {
-            residual_donor_rows
-          } else {
-            residual_donor_rows[[formula_info[[v]]$predictor_roles$target_block]]
-          }
           with_seed(seed + length(variables) + i - 1, sample_coherent_gaussian_epred_column(
             epred_new = epred_new,
             epred_train = epred_train,
             y_train = data[[v]],
             template = data[[v]],
-            donor_rows = donor_rows
+            donor_rows = residual_donor_rows
           ))
         } else {
           pp <- brms::posterior_predict(model, newdata = preds)
@@ -492,6 +527,11 @@ engine_brm <- function(
             target_block = formula_info[[v]]$predictor_roles$target_block,
             between_k = formula_info[[v]]$predictor_roles$between_k
           ),
+          feeder_roles = list(
+            feeder_mode = "fully_noisy",
+            sampled_predictors = character(),
+            noisy_predictors = all.vars(formulas[[v]])[-1]
+          ),
           prior_roles = prior_info$meta
         )
       }
@@ -504,20 +544,7 @@ engine_brm <- function(
     variables
   )
 
-  synth_models <- if (is.null(normalized_blocks)) {
-    purrr::map(brm_models, "model")
-  } else {
-    purrr::map(brm_models, function(x) {
-      list(
-        model = x$model,
-        predictor_roles = x$predictor_roles,
-        prior_roles = x$prior_roles,
-        measurement_mode = "block_predictor_brm",
-        measurement_blocks = normalized_blocks,
-        between_block_shrink = between_block_shrink
-      )
-    })
-  }
+  synth_models <- purrr::map(brm_models, "model")
 
   if (!is.null(covariates)) {
     synthetic_data <- cbind(
@@ -529,5 +556,242 @@ engine_brm <- function(
   list(
     models = synth_models,
     data = synthetic_data
+  )
+}
+
+engine_brm_block_score <- function(
+    data,
+    variables,
+    covariates,
+    measurement_plan,
+    between_block_shrink,
+    predictor_method,
+    predictor_k,
+    replace,
+    n_aug,
+    base_sd,
+    sd_scale,
+    k,
+    chains,
+    cores,
+    iter,
+    warmup,
+    thin,
+    algorithm,
+    backend,
+    seed
+) {
+  leaf_scores <- make_brm_leaf_score_frame(
+    data = data,
+    leaf_blocks = measurement_plan$leaf_blocks
+  )
+  family_scores <- make_brm_structural_score_frame(
+    leaf_scores = leaf_scores,
+    measurement_plan = measurement_plan
+  )
+  score_column_map <- make_brm_score_column_map(measurement_plan$family_names)
+
+  score_data <- family_scores
+  names(score_data) <- unname(score_column_map[names(family_scores)])
+  model_data <- cbind(score_data, data[, covariates, drop = FALSE])
+  score_columns <- unname(score_column_map)
+
+  sampled_indices <- with_seed(
+    seed,
+    sample.int(nrow(data), size = n_aug, replace = replace)
+  )
+  sampled_model_data <- model_data[sampled_indices, , drop = FALSE]
+
+  formula_info <- stats::setNames(
+    lapply(seq_along(measurement_plan$family_names), function(i) {
+      family_name <- measurement_plan$family_names[[i]]
+      target_col <- score_column_map[[family_name]]
+      predictor_roles <- with_seed(
+        seed + i - 1,
+        select_brm_score_predictors(
+          target = target_col,
+          score_data = score_data,
+          score_columns = score_columns,
+          predictor_method = predictor_method,
+          predictor_k = predictor_k,
+          between_block_shrink = between_block_shrink
+        )
+      )
+      rhs_terms <- c(predictor_roles$predictors, covariates)
+      rhs <- if (length(rhs_terms) == 0) "1" else paste(rhs_terms, collapse = " + ")
+
+      list(
+        family_name = family_name,
+        target_col = target_col,
+        formula = stats::as.formula(paste0(target_col, " ~ ", rhs)),
+        predictor_roles = predictor_roles
+      )
+    }),
+    measurement_plan$family_names
+  )
+
+  pb <- progress::progress_bar$new(
+    format = "  Generating Data [:bar] :percent ETA: :eta",
+    total = length(measurement_plan$family_names),
+    clear = FALSE,
+    width = 100
+  )
+
+  shrink_sd <- base_sd / (1 + n_aug / nrow(data))^k
+  score_models <- stats::setNames(
+    lapply(seq_along(measurement_plan$family_names), function(i) {
+      family_name <- measurement_plan$family_names[[i]]
+      info <- formula_info[[family_name]]
+      target_col <- info$target_col
+
+      if (isTRUE(getOption("sydni.brm_verbose", FALSE))) {
+        message(
+          paste0(
+            "Fitting BRM structural family ", i, "/",
+            length(measurement_plan$family_names), ": ", family_name,
+            " | formula = ", paste(deparse(info$formula), collapse = "")
+          )
+        )
+        utils::flush.console()
+      }
+
+      prior_info <- make_brm_role_priors(
+        data = model_data,
+        predictor_roles = info$predictor_roles,
+        covariates = covariates,
+        base_sd = base_sd,
+        shrink_sd = shrink_sd,
+        between_block_shrink = between_block_shrink
+      )
+      intercept_prior <- estimate_intercept_prior(
+        y = model_data[[target_col]],
+        sd_scale = sd_scale
+      )
+
+      model <- with_seed(seed + i - 1, suppressMessages(
+        quiet_brm(
+          formula = info$formula,
+          data = model_data,
+          family = gaussian(),
+          prior = if (is.null(prior_info$priors)) intercept_prior else c(prior_info$priors, intercept_prior),
+          chains = chains,
+          cores = if (identical(cores, "auto")) parallel::detectCores() - 1 else cores,
+          iter = iter,
+          warmup = warmup,
+          thin = thin,
+          algorithm = algorithm,
+          seed = seed,
+          backend = backend,
+          refresh = 0,
+          silent = 2
+        )
+      ))
+
+      rhs_terms <- all.vars(info$formula)[-1]
+      preds <- sampled_model_data[, rhs_terms, drop = FALSE]
+      train_preds <- model_data[, rhs_terms, drop = FALSE]
+      epred_new <- brms::posterior_epred(model, newdata = preds)
+      epred_train <- brms::posterior_epred(model, newdata = train_preds)
+      value <- with_seed(seed + length(measurement_plan$family_names) + i - 1, {
+        sample_coherent_gaussian_epred_column(
+          epred_new = epred_new,
+          epred_train = epred_train,
+          y_train = model_data[[target_col]],
+          template = model_data[[target_col]],
+          donor_rows = sampled_indices
+        )
+      })
+
+      pb$tick()
+
+      list(
+        model = model,
+        value = value,
+        predictor_roles = make_brm_score_predictor_metadata(
+          predictor_roles = info$predictor_roles,
+          score_column_map = score_column_map,
+          covariates = covariates,
+          target_family = family_name
+        ),
+        prior_roles = prior_info$meta,
+        formula = info$formula
+      )
+    }),
+    measurement_plan$family_names
+  )
+
+  synthetic_family_scores <- as.data.frame(
+    purrr::map_dfc(score_models, "value")
+  )
+  names(synthetic_family_scores) <- measurement_plan$family_names
+
+  synthetic_leaf_scores <- simulate_brm_leaf_scores(
+    synthetic_family_scores = synthetic_family_scores,
+    observed_family_scores = family_scores,
+    observed_leaf_scores = leaf_scores,
+    measurement_plan = measurement_plan,
+    seed = seed + length(measurement_plan$family_names) + 1000L
+  )
+
+  synthetic_data <- reconstruct_brm_items_from_leaf_scores(
+    synthetic_leaf_scores = synthetic_leaf_scores,
+    observed_leaf_scores = leaf_scores,
+    data = data,
+    leaf_blocks = measurement_plan$leaf_blocks,
+    variables = variables,
+    seed = seed + length(measurement_plan$family_names) + 2000L,
+    donor_k = 5L
+  )
+  attr(synthetic_data, "donor_rows") <- NULL
+
+  if (!is.null(covariates)) {
+    synthetic_data <- cbind(
+      synthetic_data,
+      data[sampled_indices, covariates, drop = FALSE]
+    )
+  }
+
+  list(
+    models = list(
+      all = list(
+        measurement_mode = "block_score_donor_brm",
+        measurement_blocks = measurement_plan$leaf_blocks,
+        leaf_blocks = measurement_plan$leaf_blocks,
+        structural_families = measurement_plan$structural_families,
+        block_score_models = purrr::map(score_models, "model"),
+        formulas = purrr::map(score_models, "formula"),
+        predictor_roles = purrr::map(score_models, "predictor_roles"),
+        prior_roles = purrr::map(score_models, "prior_roles"),
+        score_columns = score_column_map,
+        donor_settings = list(
+          method = "nearest_leaf_score",
+          donor_k = 5L,
+          item_reconstruction = "copy_full_leaf_block"
+        ),
+        ignored_composites = measurement_plan$ignored_composites,
+        between_block_shrink = between_block_shrink,
+        predictor_k = predictor_k
+      )
+    ),
+    data = synthetic_data
+  )
+}
+
+make_brm_score_predictor_metadata <- function(
+    predictor_roles,
+    score_column_map,
+    covariates,
+    target_family
+) {
+  inverse_map <- stats::setNames(names(score_column_map), unname(score_column_map))
+  between_cols <- predictor_roles$between_block_predictors
+
+  list(
+    target_family = target_family,
+    target_score = predictor_roles$target_block,
+    between_family_predictors = unname(inverse_map[between_cols]),
+    between_score_predictors = between_cols,
+    covariates = covariates,
+    between_k = predictor_roles$between_k
   )
 }

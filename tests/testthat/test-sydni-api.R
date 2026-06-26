@@ -225,8 +225,8 @@ test_that("sydni forwards measurement-aware brm arguments", {
     engine_brm = function(...) {
       captured <<- list(...)
       list(
-        models = list(a1 = list(
-          measurement_mode = "block_predictor_brm",
+        models = list(all = list(
+          measurement_mode = "block_score_donor_brm",
           between_block_shrink = captured$between_block_shrink,
           measurement_blocks = captured$measurement_blocks
         )),
@@ -251,9 +251,9 @@ test_that("sydni forwards measurement-aware brm arguments", {
   expect_equal(out$meta$between_block_shrink, 0)
   expect_equal(captured$between_block_shrink, 0)
   expect_equal(names(captured$measurement_blocks), c("alpha", "beta"))
-  expect_equal(out$models$a1$between_block_shrink, 0)
-  expect_equal(out$models$a1$measurement_mode, "block_predictor_brm")
-  expect_equal(names(out$models$a1$measurement_blocks), c("alpha", "beta"))
+  expect_equal(out$models$all$between_block_shrink, 0)
+  expect_equal(out$models$all$measurement_mode, "block_score_donor_brm")
+  expect_equal(names(out$models$all$measurement_blocks), c("alpha", "beta"))
 })
 
 test_that("sydni does not warn about measurement arguments for bart", {

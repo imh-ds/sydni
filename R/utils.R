@@ -283,6 +283,411 @@ apply_between_block_shrinkage <- function(cor_mat, between_block_shrink = 0.5) {
   stabilize_correlation_matrix(out)
 }
 
+make_brm_measurement_plan <- function(measurement_blocks, variables) {
+  if (is.null(measurement_blocks)) {
+    return(NULL)
+  }
+
+  if (is_cscore_composite_list(measurement_blocks)) {
+    return(make_brm_cscore_measurement_plan(measurement_blocks, variables))
+  }
+
+  if (!is.list(measurement_blocks) || length(measurement_blocks) == 0) {
+    stop("`measurement_blocks` must be NULL or a non-empty named list.")
+  }
+  if (is.null(names(measurement_blocks)) || any(names(measurement_blocks) == "")) {
+    stop("`measurement_blocks` must be a named list.")
+  }
+
+  leaf_blocks <- lapply(measurement_blocks, function(items) {
+    if (!is.character(items)) {
+      stop("Each `measurement_blocks` element must be a character vector.")
+    }
+    unique(items)
+  })
+  validate_brm_leaf_blocks(leaf_blocks, variables)
+  leaf_blocks <- add_brm_singleton_leaf_blocks(leaf_blocks, variables)
+
+  structural_families <- stats::setNames(
+    lapply(names(leaf_blocks), function(block_name) {
+      list(
+        leaf_blocks = block_name,
+        variables = leaf_blocks[[block_name]],
+        source = "plain"
+      )
+    }),
+    names(leaf_blocks)
+  )
+
+  make_brm_measurement_plan_object(
+    leaf_blocks = leaf_blocks,
+    structural_families = structural_families,
+    ignored_composites = character(),
+    input_type = "plain"
+  )
+}
+
+make_brm_cscore_measurement_plan <- function(composite_list, variables) {
+  lower <- composite_list$lower
+  higher <- composite_list$higher
+
+  if (!is.list(lower) || length(lower) == 0) {
+    stop("`measurement_blocks$lower` must be a non-empty list.")
+  }
+  if (is.null(names(lower)) || any(names(lower) == "")) {
+    stop("`measurement_blocks$lower` must be a named list.")
+  }
+
+  ignored <- character()
+  leaf_blocks <- list()
+  for (block_name in names(lower)) {
+    items <- lower[[block_name]]
+    if (!is.character(items)) {
+      stop("Each `measurement_blocks$lower` element must be a character vector.")
+    }
+    items <- unique(items)
+    in_variables <- items %in% variables
+
+    if (all(in_variables)) {
+      leaf_blocks[[block_name]] <- items
+    } else if (!any(in_variables)) {
+      ignored <- c(ignored, block_name)
+    } else {
+      stop(
+        paste0(
+          "`measurement_blocks$lower$", block_name,
+          "` mixes synthesized and non-synthesized items. Either include all items in `variables` or remove the composite."
+        )
+      )
+    }
+  }
+
+  validate_brm_leaf_blocks(leaf_blocks, variables)
+
+  structural_families <- list()
+  referenced_valid_lower <- character()
+  if (!is.null(higher) && length(higher) > 0) {
+    if (!is.list(higher) || is.null(names(higher)) || any(names(higher) == "")) {
+      stop("`measurement_blocks$higher` must be a named list when supplied.")
+    }
+
+    for (family_name in names(higher)) {
+      lower_refs <- higher[[family_name]]
+      if (!is.character(lower_refs)) {
+        stop("Each `measurement_blocks$higher` element must be a character vector.")
+      }
+
+      missing_lower <- setdiff(lower_refs, names(lower))
+      if (length(missing_lower) > 0) {
+        stop(
+          paste0(
+            "`measurement_blocks$higher` references lower-order composites not present in `measurement_blocks$lower`: ",
+            paste(missing_lower, collapse = ", "),
+            "."
+          )
+        )
+      }
+
+      valid_refs <- intersect(lower_refs, names(leaf_blocks))
+      if (length(valid_refs) == 0) {
+        ignored <- c(ignored, family_name)
+        next
+      }
+
+      structural_families[[family_name]] <- list(
+        leaf_blocks = valid_refs,
+        variables = unique(unlist(leaf_blocks[valid_refs], use.names = FALSE)),
+        source = "higher"
+      )
+      referenced_valid_lower <- union(referenced_valid_lower, valid_refs)
+    }
+  }
+
+  remaining_lower <- setdiff(names(leaf_blocks), referenced_valid_lower)
+  for (block_name in remaining_lower) {
+    structural_families[[block_name]] <- list(
+      leaf_blocks = block_name,
+      variables = leaf_blocks[[block_name]],
+      source = "lower"
+    )
+  }
+
+  leaf_blocks <- add_brm_singleton_leaf_blocks(leaf_blocks, variables)
+  singleton_names <- setdiff(names(leaf_blocks), c(names(lower), names(structural_families)))
+  for (block_name in singleton_names) {
+    structural_families[[block_name]] <- list(
+      leaf_blocks = block_name,
+      variables = leaf_blocks[[block_name]],
+      source = "singleton"
+    )
+  }
+
+  make_brm_measurement_plan_object(
+    leaf_blocks = leaf_blocks,
+    structural_families = structural_families,
+    ignored_composites = unique(ignored),
+    input_type = "cscore"
+  )
+}
+
+validate_brm_leaf_blocks <- function(leaf_blocks, variables) {
+  if (length(leaf_blocks) == 0) {
+    return(invisible(TRUE))
+  }
+
+  block_items <- unlist(leaf_blocks, use.names = FALSE)
+  missing_items <- setdiff(block_items, variables)
+  if (length(missing_items) > 0) {
+    stop(
+      paste0(
+        "`measurement_blocks` contains items not present in `variables`: ",
+        paste(missing_items, collapse = ", "),
+        "."
+      )
+    )
+  }
+
+  duplicated_items <- unique(block_items[duplicated(block_items)])
+  if (length(duplicated_items) > 0) {
+    stop(
+      paste0(
+        "`measurement_blocks` items cannot appear in more than one BRM leaf block: ",
+        paste(duplicated_items, collapse = ", "),
+        "."
+      )
+    )
+  }
+
+  invisible(TRUE)
+}
+
+add_brm_singleton_leaf_blocks <- function(leaf_blocks, variables) {
+  block_items <- unlist(leaf_blocks, use.names = FALSE)
+  unblocked <- setdiff(variables, block_items)
+  if (length(unblocked) == 0) {
+    return(leaf_blocks)
+  }
+
+  c(leaf_blocks, stats::setNames(as.list(unblocked), unblocked))
+}
+
+make_brm_measurement_plan_object <- function(
+    leaf_blocks,
+    structural_families,
+    ignored_composites,
+    input_type
+) {
+  if (length(leaf_blocks) == 0) {
+    stop("No synthesized variables were found in `measurement_blocks`.")
+  }
+  if (length(structural_families) == 0) {
+    stop("No BRM structural families could be formed from `measurement_blocks`.")
+  }
+
+  leaf_to_family <- stats::setNames(rep(NA_character_, length(leaf_blocks)), names(leaf_blocks))
+  for (family_name in names(structural_families)) {
+    leaf_to_family[structural_families[[family_name]]$leaf_blocks] <- family_name
+  }
+
+  list(
+    leaf_blocks = leaf_blocks,
+    structural_families = structural_families,
+    family_names = names(structural_families),
+    leaf_to_family = leaf_to_family,
+    ignored_composites = ignored_composites,
+    input_type = input_type
+  )
+}
+
+make_brm_leaf_score_frame <- function(data, leaf_blocks) {
+  make_measurement_block_scores(data = data, measurement_blocks = leaf_blocks)
+}
+
+make_brm_structural_score_frame <- function(leaf_scores, measurement_plan) {
+  family_scores <- lapply(measurement_plan$structural_families, function(family) {
+    leaves <- family$leaf_blocks
+    if (length(leaves) == 1) {
+      raw_score <- leaf_scores[[leaves]]
+    } else {
+      raw_score <- rowMeans(leaf_scores[, leaves, drop = FALSE], na.rm = TRUE)
+      raw_score[!is.finite(raw_score)] <- NA_real_
+    }
+
+    standardize_brm_score(raw_score)
+  })
+
+  out <- as.data.frame(family_scores)
+  names(out) <- names(measurement_plan$structural_families)
+  out
+}
+
+standardize_brm_score <- function(x) {
+  x <- as.numeric(x)
+  x_mean <- mean(x, na.rm = TRUE)
+  x_sd <- stats::sd(x, na.rm = TRUE)
+  if (!is.finite(x_sd) || x_sd <= sqrt(.Machine$double.eps)) {
+    return(rep(0, length(x)))
+  }
+  out <- (x - x_mean) / x_sd
+  out[!is.finite(out)] <- 0
+  out
+}
+
+make_brm_score_column_map <- function(family_names) {
+  safe_names <- make.names(family_names, unique = TRUE)
+  stats::setNames(paste0("sydni_brm_score_", safe_names), family_names)
+}
+
+select_brm_score_predictors <- function(
+    target,
+    score_data,
+    score_columns,
+    predictor_method,
+    predictor_k,
+    between_block_shrink
+) {
+  candidates <- setdiff(score_columns, target)
+  between_k <- min(
+    length(candidates),
+    max(0L, as.integer(floor(predictor_k * between_block_shrink)))
+  )
+
+  predictors <- if (between_k == 0 || length(candidates) == 0) {
+    character()
+  } else if (identical(predictor_method, "full")) {
+    candidates[seq_len(between_k)]
+  } else {
+    select_predictors(
+      target = target,
+      data = score_data,
+      variables = c(target, candidates),
+      predictor_method = predictor_method,
+      predictor_k = between_k
+    )
+  }
+
+  list(
+    predictors = predictors,
+    within_block_predictors = character(),
+    between_block_predictors = predictors,
+    between_k = between_k,
+    target_block = target
+  )
+}
+
+simulate_brm_leaf_scores <- function(
+    synthetic_family_scores,
+    observed_family_scores,
+    observed_leaf_scores,
+    measurement_plan,
+    seed = NA
+) {
+  n <- nrow(synthetic_family_scores)
+  out <- as.data.frame(matrix(
+    NA_real_,
+    nrow = n,
+    ncol = length(measurement_plan$leaf_blocks)
+  ))
+  names(out) <- names(measurement_plan$leaf_blocks)
+
+  for (family_index in seq_along(measurement_plan$structural_families)) {
+    family_name <- names(measurement_plan$structural_families)[[family_index]]
+    leaves <- measurement_plan$structural_families[[family_name]]$leaf_blocks
+    family_score <- synthetic_family_scores[[family_name]]
+
+    if (length(leaves) == 1) {
+      out[[leaves]] <- family_score
+      next
+    }
+
+    observed_block <- data.frame(
+      family = observed_family_scores[[family_name]],
+      observed_leaf_scores[, leaves, drop = FALSE],
+      check.names = FALSE
+    )
+    means <- vapply(observed_block, mean, numeric(1), na.rm = TRUE)
+    sigma <- stats::cov(observed_block, use = "pairwise.complete.obs")
+    sigma <- as.matrix(sigma)
+    sigma[!is.finite(sigma)] <- 0
+    sigma <- stabilize_covariance_matrix(sigma)
+
+    sigma_ff <- max(sigma["family", "family"], 1e-8)
+    sigma_lf <- sigma[leaves, "family", drop = FALSE]
+    sigma_ll <- sigma[leaves, leaves, drop = FALSE]
+    cond_mean <- matrix(family_score - means[["family"]], ncol = 1) %*%
+      t(sigma_lf / sigma_ff)
+    cond_mean <- sweep(cond_mean, 2, means[leaves], "+")
+    cond_cov <- sigma_ll - sigma_lf %*% t(sigma_lf) / sigma_ff
+    cond_cov <- stabilize_covariance_matrix(cond_cov)
+
+    residuals <- with_seed(seed + family_index, {
+      matrix(stats::rnorm(n * length(leaves)), nrow = n, ncol = length(leaves))
+    }) %*% chol(cond_cov)
+
+    out[, leaves] <- cond_mean + residuals
+  }
+
+  out
+}
+
+reconstruct_brm_items_from_leaf_scores <- function(
+    synthetic_leaf_scores,
+    observed_leaf_scores,
+    data,
+    leaf_blocks,
+    variables,
+    seed = NA,
+    donor_k = 5L
+) {
+  out <- data[rep(1, nrow(synthetic_leaf_scores)), variables, drop = FALSE]
+  donor_rows <- list()
+
+  for (block_index in seq_along(leaf_blocks)) {
+    block_name <- names(leaf_blocks)[[block_index]]
+    block_vars <- leaf_blocks[[block_name]]
+    target_scores <- synthetic_leaf_scores[[block_name]]
+    observed_scores <- observed_leaf_scores[[block_name]]
+    valid_observed <- which(is.finite(observed_scores))
+    if (length(valid_observed) == 0) {
+      valid_observed <- seq_len(nrow(data))
+      observed_scores <- rep(0, nrow(data))
+    }
+
+    donors <- with_seed(seed + block_index, {
+      vapply(seq_along(target_scores), function(i) {
+        target_value <- target_scores[[i]]
+        if (!is.finite(target_value)) {
+          target_value <- 0
+        }
+        distances <- abs(observed_scores[valid_observed] - target_value)
+        nearest <- valid_observed[order(distances, na.last = NA)]
+        nearest <- head(nearest, max(1L, min(as.integer(donor_k), length(nearest))))
+        sample(nearest, size = 1L)
+      }, integer(1))
+    })
+
+    out[, block_vars] <- data[donors, block_vars, drop = FALSE]
+    donor_rows[[block_name]] <- donors
+  }
+
+  attr(out, "donor_rows") <- donor_rows
+  out
+}
+
+stabilize_covariance_matrix <- function(sigma, tol = 1e-8) {
+  sigma <- as.matrix(sigma)
+  sigma[!is.finite(sigma)] <- 0
+  sigma <- (sigma + t(sigma)) / 2
+
+  eig <- eigen(sigma, symmetric = TRUE)
+  eig$values[eig$values < tol] <- tol
+  out <- eig$vectors %*% diag(eig$values, nrow = length(eig$values)) %*% t(eig$vectors)
+  out <- (out + t(out)) / 2
+  rownames(out) <- rownames(sigma)
+  colnames(out) <- colnames(sigma)
+  out
+}
+
 resolve_sydni_columns <- function(data, variables = NULL, covariates = NULL) {
   data_names <- names(data)
 
@@ -884,13 +1289,23 @@ sample_coherent_gaussian_epred_column <- function(
     y_train,
     template,
     donor_rows,
+    epred_rows = NULL,
     residual_scale = 1
 ) {
   if (length(dim(epred_new)) != 2 || length(dim(epred_train)) != 2) {
     stop("`epred_new` and `epred_train` must be posterior expectation matrices.")
   }
 
-  rows <- sample.int(nrow(epred_new), ncol(epred_new), replace = TRUE)
+  rows <- epred_rows
+  if (is.null(rows)) {
+    rows <- sample.int(nrow(epred_new), ncol(epred_new), replace = TRUE)
+  }
+  if (length(rows) != ncol(epred_new)) {
+    stop("`epred_rows` must have one entry per posterior expectation column.")
+  }
+  if (any(is.na(rows)) || any(rows < 1) || any(rows > nrow(epred_new))) {
+    stop("`epred_rows` contains invalid posterior expectation row indices.")
+  }
   raw <- epred_new[cbind(rows, seq_len(ncol(epred_new)))]
 
   fitted_mean <- colMeans(epred_train, na.rm = TRUE)

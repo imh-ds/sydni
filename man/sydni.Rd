@@ -140,8 +140,9 @@ dataset with controlled noise injection.
 `sydni()` is a unified front end for multiple synthesis engines:
 
 - `"brm"` fits one conditional Bayesian regression model per synthesized
-  variable on a noisy bootstrap feeder sample and generates posterior
-  predictive draws.
+  variable by default. When `measurement_blocks` are supplied, it instead
+  fits BRM models to structural block scores and reconstructs coherent
+  item blocks from observed donors.
 - `"copula"` fits subgroup-aware Gaussian copulas with empirical marginal
   reconstruction on noisy feeder data.
 - `"bart"` fits regularized Bayesian additive regression trees on noisy

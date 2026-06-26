@@ -94,14 +94,15 @@ replacement.}
 
 \item{backend}{Character. One of `"rstan"` or `"cmdstanr"`.}
 
-\item{measurement_blocks}{Optional named list defining item blocks whose
-within-block predictors should be preserved while between-block predictors
-are limited. Also accepts a `cscore::composite_list()`-style list with
-`lower` and `higher` elements.}
+\item{measurement_blocks}{Optional named list or
+`cscore::composite_list()`-style list. When supplied, BRM uses the
+measurement-aware block-score donor path: lower-order item batteries are
+preserved as donor-reconstructed leaf blocks and higher-order composites
+define structural score families when available.}
 
 \item{between_block_shrink}{Optional numeric value in `[0, 1]`. When
-`measurement_blocks` is supplied, the between-block predictor count is
-`floor(predictor_k * between_block_shrink)` and between-block priors are
+`measurement_blocks` is supplied, the between-family predictor count is
+`floor(predictor_k * between_block_shrink)` and between-family priors are
 tightened by the same multiplier. Defaults to `0.50`.}
 
 \item{seed}{Numeric. Seed for reproducibility.}
@@ -124,6 +125,15 @@ bootstrap-resampled and noise-injected feeder dataset. It is most appropriate
 when the analyst wants explicit conditional relationships among variables and
 wants the fitted models to remain inspectable through \pkg{brms}.
 
+When \code{measurement_blocks} is supplied, BRM switches to a
+measurement-aware block-score donor path. Instead of fitting one model per
+item, SYDNI computes leaf measurement-block scores, combines them into
+structural family scores, fits BRM models at that structural score layer, and
+reconstructs item responses by copying coherent observed item blocks from
+nearest observed leaf-score donors. This path is designed for psychometric
+augmentation where within-scale reliability should be preserved while
+between-construct relations are made conservative.
+
 Let \eqn{D = \{x_i\}_{i=1}^{n_{\mathrm{obs}}}} be the observed data,
 \eqn{V = \{v_1,\ldots,v_p\}} be the synthesized variables, and
 \eqn{C = \{c_1,\ldots,c_q\}} be optional covariates. The requested synthetic
@@ -133,12 +143,15 @@ The engine proceeds in six steps:
 
 \enumerate{
   \item Draw a feeder sample \eqn{\tilde{D}} of size
-    \eqn{n_{\mathrm{aug}}} from \eqn{D} using \code{dplyr::slice_sample()}:
+    \eqn{n_{\mathrm{aug}}} from \eqn{D} by sampling observed row indices:
     \deqn{
       \tilde{D} = \{x_{s_i}: s_i \sim
       \mathrm{Uniform}(\{1,\ldots,n_{\mathrm{obs}}\})\}_{i=1}^{n_{\mathrm{aug}}}.
     }
     If \code{replace = FALSE}, the indices are sampled without replacement.
+    The sampled indices are retained internally so Gaussian residual donors
+    and measurement-aware same-block predictors can be aligned to the same
+    bootstrap row.
 
   \item Inject noise into the synthesized columns of \eqn{\tilde{D}} to form
     the feeder data \eqn{\tilde{D}_{\varepsilon}}. Covariates are not
@@ -248,14 +261,37 @@ The engine proceeds in six steps:
     rounded and clamped to the observed range, and continuous numeric
     outcomes are clamped to the observed range.
 
-    For Gaussian numeric targets, SYDNI instead draws from
-    \code{brms::posterior_epred()} and adds centered empirical residuals.
-    The residual donor row is shared across all targets when
-    \code{measurement_blocks = NULL}; when measurement blocks are supplied,
-    it is shared within each block and sampled independently across blocks.
-    This preserves residual covariance within item batteries and avoids the
-    reliability loss that can occur when each item receives independent
-    posterior-predictive noise.
+    For Gaussian numeric targets in the legacy item-wise path, SYDNI instead
+    draws from \code{brms::posterior_epred()} and adds centered empirical
+    residuals. The residual donor row is aligned to the clean bootstrap row
+    used for the feeder sample, which preserves residual covariance better
+    than fully independent posterior-predictive draws.
+}
+
+With \code{measurement_blocks}, the item-wise workflow above is replaced by
+a three-stage block-score workflow:
+
+\enumerate{
+  \item Normalize measurement structure. Plain named lists are treated as
+    both leaf item blocks and structural families. For
+    \code{cscore::composite_list()}-style inputs, lower-order item batteries
+    become leaf blocks, higher-order composites become structural families,
+    and composites whose items are not synthesized are ignored.
+
+  \item Fit BRM models to structural family scores. Leaf scores are
+    standardized item-block means; higher-order family scores are
+    standardized means of their leaf scores. BRM fits one Gaussian model per
+    structural family score, using other family scores and covariates as
+    predictors. The \code{between_block_shrink} value limits between-family
+    predictor counts and tightens between-family slope priors.
+
+  \item Reconstruct item-level data. Synthetic structural family scores are
+    expanded to leaf scores using the observed within-family leaf-score
+    covariance, without shrinkage inside the family. Each synthetic leaf
+    score then selects a nearest observed donor row, and the full observed
+    item block is copied from that donor. This preserves valid response
+    support and protects within-block item covariance, including two-item
+    scales where Cronbach's alpha is especially sensitive.
 }
 
 The final synthetic dataset is assembled column-wise as
@@ -265,8 +301,11 @@ The final synthetic dataset is assembled column-wise as
 }
 where \eqn{C_{\mathrm{feeder}}} is included only when \code{covariates} are
 supplied. The returned \code{models} element contains the fitted \pkg{brms}
-model for each synthesized target, and the returned \code{data} element
-contains \eqn{D^{\star}}.
+model for each synthesized target in the legacy path. In the
+measurement-aware path, \code{models$all} stores the structural-family BRM
+models, measurement plan, predictor roles, donor settings, and ignored
+non-synthesized composites. The returned \code{data} element always contains
+item-level synthetic rows.
 
 The BRM engine should be interpreted as a robustness and sensitivity-analysis
 engine. It does not make synthetic rows into additional empirical evidence,

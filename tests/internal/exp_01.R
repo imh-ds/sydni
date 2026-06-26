@@ -151,6 +151,7 @@ results <- sydni(
     variables = vars,
     covariates = covars,
     engine = "brm",
+    measurement_blocks = composite_list,
     n_aug = nrow(cdata)-nrow(sdata),
     families = families,
     # predictor_k = 2,
