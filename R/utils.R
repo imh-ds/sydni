@@ -653,18 +653,27 @@ reconstruct_brm_items_from_leaf_scores <- function(
       observed_scores <- rep(0, nrow(data))
     }
 
-    donors <- with_seed(seed + block_index, {
-      vapply(seq_along(target_scores), function(i) {
-        target_value <- target_scores[[i]]
-        if (!is.finite(target_value)) {
-          target_value <- 0
-        }
-        distances <- abs(observed_scores[valid_observed] - target_value)
-        nearest <- valid_observed[order(distances, na.last = NA)]
-        nearest <- head(nearest, max(1L, min(as.integer(donor_k), length(nearest))))
-        sample(nearest, size = 1L)
-      }, integer(1))
-    })
+    donors <- if (length(block_vars) == 2L) {
+      match_two_item_brm_donors_by_rank(
+        target_scores = target_scores,
+        observed_scores = observed_scores,
+        valid_observed = valid_observed,
+        seed = seed + block_index
+      )
+    } else {
+      with_seed(seed + block_index, {
+        vapply(seq_along(target_scores), function(i) {
+          target_value <- target_scores[[i]]
+          if (!is.finite(target_value)) {
+            target_value <- 0
+          }
+          distances <- abs(observed_scores[valid_observed] - target_value)
+          nearest <- valid_observed[order(distances, na.last = NA)]
+          nearest <- head(nearest, max(1L, min(as.integer(donor_k), length(nearest))))
+          sample(nearest, size = 1L)
+        }, integer(1))
+      })
+    }
 
     out[, block_vars] <- data[donors, block_vars, drop = FALSE]
     donor_rows[[block_name]] <- donors
@@ -672,6 +681,40 @@ reconstruct_brm_items_from_leaf_scores <- function(
 
   attr(out, "donor_rows") <- donor_rows
   out
+}
+
+match_two_item_brm_donors_by_rank <- function(
+    target_scores,
+    observed_scores,
+    valid_observed,
+    seed = NA
+) {
+  n_target <- length(target_scores)
+  if (n_target == 0) {
+    return(integer())
+  }
+
+  observed_scores_valid <- observed_scores[valid_observed]
+  observed_scores_valid[!is.finite(observed_scores_valid)] <- 0
+  target_scores_valid <- target_scores
+  target_scores_valid[!is.finite(target_scores_valid)] <- 0
+
+  matched <- with_seed(seed, {
+    observed_order <- valid_observed[order(
+      observed_scores_valid,
+      stats::runif(length(valid_observed)),
+      na.last = TRUE
+    )]
+    target_rank <- rank(target_scores_valid, ties.method = "random")
+    probs <- (target_rank - 0.5) / n_target
+    donor_index <- pmin(
+      length(observed_order),
+      pmax(1L, ceiling(probs * length(observed_order)))
+    )
+    observed_order[donor_index]
+  })
+
+  matched
 }
 
 stabilize_covariance_matrix <- function(sigma, tol = 1e-8) {

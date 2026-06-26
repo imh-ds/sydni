@@ -181,7 +181,11 @@
 #'     score then selects a nearest observed donor row, and the full observed
 #'     item block is copied from that donor. This preserves valid response
 #'     support and protects within-block item covariance, including two-item
-#'     scales where Cronbach's alpha is especially sensitive.
+#'     scales where Cronbach's alpha is especially sensitive. For two-item leaf
+#'     blocks, donor rows are selected by rank/quantile matching on the leaf
+#'     score rather than random nearest-neighbor sampling, which better
+#'     preserves observed response-pair ordering without changing the BRM
+#'     structural score model.
 #' }
 #'
 #' The final synthetic dataset is assembled column-wise as
@@ -765,6 +769,7 @@ engine_brm_block_score <- function(
         score_columns = score_column_map,
         donor_settings = list(
           method = "nearest_leaf_score",
+          two_item_method = "rank_quantile_leaf_score",
           donor_k = 5L,
           item_reconstruction = "copy_full_leaf_block"
         ),

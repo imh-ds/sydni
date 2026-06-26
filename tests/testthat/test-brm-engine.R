@@ -147,6 +147,40 @@ test_that("coherent gaussian epred sampler uses supplied residual donor rows", {
   expect_equal(out, c(5, 5, 3))
 })
 
+test_that("two-item brm donor reconstruction uses rank-matched full item pairs", {
+  data <- data.frame(
+    a1 = c(1, 2, 4, 5),
+    a2 = c(1, 2, 4, 5),
+    b1 = c(1, 3, 5, 7),
+    b2 = c(2, 4, 6, 8),
+    b3 = c(3, 5, 7, 9)
+  )
+  observed_leaf_scores <- data.frame(
+    alpha = c(-2, -1, 1, 2),
+    beta = c(-2, -1, 1, 2)
+  )
+  synthetic_leaf_scores <- data.frame(
+    alpha = c(2, -2, 1, -1),
+    beta = c(2, -2, 1, -1)
+  )
+
+  out <- reconstruct_brm_items_from_leaf_scores(
+    synthetic_leaf_scores = synthetic_leaf_scores,
+    observed_leaf_scores = observed_leaf_scores,
+    data = data,
+    leaf_blocks = list(alpha = c("a1", "a2"), beta = c("b1", "b2", "b3")),
+    variables = names(data),
+    seed = 1,
+    donor_k = 1
+  )
+  donors <- attr(out, "donor_rows")
+
+  expect_equal(donors$alpha, c(4L, 1L, 3L, 2L))
+  expect_equal(out$a1, data$a1[donors$alpha])
+  expect_equal(out$a2, data$a2[donors$alpha])
+  expect_equal(out$b1, data$b1[donors$beta])
+})
+
 test_that("measurement-aware brm engine uses block-score donor reconstruction", {
   skip_if_not_installed("brms")
 
@@ -182,6 +216,7 @@ test_that("measurement-aware brm engine uses block-score donor reconstruction", 
   expect_equal(names(out$models$all$leaf_blocks), "alpha")
   expect_equal(names(out$models$all$structural_families), "alpha")
   expect_equal(out$models$all$donor_settings$method, "nearest_leaf_score")
+  expect_equal(out$models$all$donor_settings$two_item_method, "rank_quantile_leaf_score")
   expect_true(all(out$data$a1 %in% sort(unique(df$a1))))
   expect_true(all(out$data$a2 %in% sort(unique(df$a2))))
   expect_gt(stats::cor(out$data$a1, out$data$a2), 0.5)
