@@ -124,8 +124,10 @@ test_that("sydni forwards measurement-aware factor arguments", {
   expect_equal(nrow(out$data), 20)
   expect_equal(out$meta$between_block_shrink, 0.25)
   expect_equal(out$models$all$between_block_shrink, 0.25)
-  expect_equal(out$models$all$measurement_mode, "block_one_factor")
+  expect_equal(out$models$all$measurement_mode, "block_one_factor_calibrated")
   expect_equal(names(out$models$all$measurement_blocks), c("alpha", "beta"))
+  expect_equal(out$models$all$score_calibration_mode, "iman_conover_family_bundle")
+  expect_equal(out$models$all$structural_correlation_reference, "input_data")
 })
 
 test_that("sydni forwards measurement-aware graphical arguments", {

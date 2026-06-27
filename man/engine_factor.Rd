@@ -60,17 +60,21 @@ rows before model fitting.}
 within-block measurement structure should be preserved while between-block
 latent correlations are shrunk. Also accepts a
 `cscore::composite_list()`-style list with `lower` and `higher` elements.
-When supplied, v1 fits one latent factor per final measurement block and
-does not apply augmentation-linked loading shrinkage within blocks.}
+When supplied, the engine fits one latent factor per final structural
+family, avoids augmentation-linked loading shrinkage within families, and
+calibrates realized between-family score correlations.}
 
 \item{between_block_shrink}{Optional numeric value in `[0, 1]`. When
-`measurement_blocks` is supplied, latent block-score correlations are
-multiplied by this value. Defaults to `0.50`.}
+`measurement_blocks` is supplied, this multiplies both latent block-score
+correlations and the final realized structural-correlation target.
+Defaults to `0.50`.}
 
 \item{seed}{Numeric. Seed for reproducibility.}
 }
 \value{
-A named list with elements `models` and `data`.
+A named list with elements `models` and `data`. In
+  measurement-aware mode, \code{models$all} contains shared structural
+  calibration metadata.
 }
 \description{
 Fits subgroup-aware latent factor models on noisy feeder data and generates
@@ -241,12 +245,65 @@ The engine proceeds in eight steps:
     empirical quantile map.
 }
 
+When \code{measurement_blocks} is supplied, the engine uses an alternative
+two-layer measurement-aware path. Plain named lists define leaf measurement
+blocks and final structural families. For
+\code{cscore::composite_list()}-style inputs, lower-order item batteries
+remain leaf blocks and lower-order batteries referenced by a higher-order
+composite are combined into one structural family. Composites containing no
+synthesized variables, such as a covariate-only socioeconomic-status score,
+are recorded as ignored. Unblocked synthesized variables become singleton
+families, and a leaf block cannot belong to multiple structural families.
+
+Within each final family, the engine estimates one factor from the observed
+item correlation matrix. Measurement-aware mode does not apply the legacy
+augmentation-linked loading multiplier or uniqueness floor to these block
+models. It therefore generates items as
+\deqn{
+  Y_b^\star = F_b^\star \Lambda_b^\top + E_b^\star,
+}
+using the observed block loadings and fitted uniquenesses before empirical
+marginal reconstruction. This protects within-family measurement structure,
+although a one-factor approximation is not expected to reproduce observed
+reliability exactly.
+
+Let \eqn{R_{\mathrm{obs}}} be the correlation matrix of standardized
+structural-family scores in the input \code{data}. The between-family target
+is
+\deqn{
+  R_{\mathrm{target}} = I +
+  \lambda (R_{\mathrm{obs}} - I),
+}
+where \eqn{\lambda} is \code{between_block_shrink}. Subgroup latent block
+correlations are first attenuated by this multiplier and blended toward the
+stable global target before factor-score simulation.
+
+After subgroup item outputs are stacked, the realized structural scores
+receive the same deterministic Iman-Conover-style calibration used by the
+measurement-aware BART engine. Twenty-five candidate rank assignments are
+evaluated. Each candidate applies one row permutation to every item in a
+structural family, and candidate error is calculated from scores recomputed
+from the permuted item data. Selection minimizes maximum off-diagonal target
+error and then mean absolute error. The uncalibrated factor output is retained
+as candidate zero, so calibration cannot worsen these target-error criteria.
+
+Moving complete item families together preserves the generated multivariate
+item distribution within every family. Consequently, the calibration stage
+leaves item margins, support, within-family correlations, lower-order
+relations inside a higher-order family, alpha, composite reliability, and
+AVE unchanged. Covariates are carried through but are not calibration
+targets; family-to-covariate associations before and after calibration are
+retained as diagnostics.
+
 The final synthetic dataset is formed by stacking subgroup outputs. If
 \code{covariates} are supplied, each synthetic subgroup block receives the
 corresponding covariate values for that subgroup. The returned
 \code{models} element stores, for each subgroup, loadings, factor
 correlations, uniquenesses, the item correlation matrix, the \pkg{psych}
 factor fit, fallback status, fallback reason, and active/inactive item sets.
+In measurement-aware mode, \code{models$all} also stores the hierarchy,
+structural targets, realized raw and calibrated correlations, target errors,
+within-family invariance diagnostics, and covariate diagnostics.
 
 This engine is most appropriate for robustness checks involving Likert-style
 item batteries, scales, and measurement models. It is not intended as a

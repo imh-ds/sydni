@@ -150,7 +150,9 @@ dataset with controlled noise injection.
   bundles while calibrating between-family score correlations toward a
   uniformly shrunk structural target.
 - `"factor"` fits subgroup-aware latent factor models for psychometric item
-  batteries.
+  batteries. With `measurement_blocks`, it preserves complete generated
+  item-family bundles while calibrating realized between-family score
+  correlations toward a uniformly shrunk structural target.
 - `"graphical"` fits subgroup-aware sparse Gaussian graphical models with
   empirical marginal reconstruction.
 

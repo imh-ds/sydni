@@ -807,7 +807,7 @@ summarize_brm_structural_correlation_error <- function(cor_mat, target_cor) {
   )
 }
 
-make_bart_score_permutation <- function(source_scores, target_scores) {
+make_measurement_score_permutation <- function(source_scores, target_scores) {
   if (length(source_scores) != length(target_scores)) {
     stop("`source_scores` and `target_scores` must have the same length.")
   }
@@ -829,7 +829,7 @@ make_bart_score_permutation <- function(source_scores, target_scores) {
   permutation
 }
 
-apply_bart_structural_bundle_permutation <- function(
+apply_measurement_structural_bundle_permutation <- function(
     data,
     source_scores,
     target_scores,
@@ -840,7 +840,7 @@ apply_bart_structural_bundle_permutation <- function(
 
   for (family_name in measurement_plan$family_names) {
     family_vars <- measurement_plan$structural_families[[family_name]]$variables
-    permutation <- make_bart_score_permutation(
+    permutation <- make_measurement_score_permutation(
       source_scores = source_scores[[family_name]],
       target_scores = target_scores[[family_name]]
     )
@@ -852,7 +852,7 @@ apply_bart_structural_bundle_permutation <- function(
   out
 }
 
-estimate_bart_within_family_correlation_change <- function(
+estimate_measurement_within_family_correlation_change <- function(
     before,
     after,
     measurement_plan
@@ -884,7 +884,7 @@ estimate_bart_within_family_correlation_change <- function(
   )
 }
 
-estimate_bart_score_covariate_correlations <- function(
+estimate_measurement_score_covariate_correlations <- function(
     score_data,
     data,
     covariates
@@ -923,7 +923,7 @@ estimate_bart_score_covariate_correlations <- function(
   ]
 }
 
-calibrate_bart_structural_bundles <- function(
+calibrate_measurement_structural_bundles <- function(
     data,
     measurement_plan,
     target_cor,
@@ -974,7 +974,7 @@ calibrate_bart_structural_bundles <- function(
         target_cor = target_cor,
         seed = draw_seed
       )
-      candidate_data <- apply_bart_structural_bundle_permutation(
+      candidate_data <- apply_measurement_structural_bundle_permutation(
         data = data,
         source_scores = raw_scores,
         target_scores = candidate_score_target,
@@ -1016,7 +1016,7 @@ calibrate_bart_structural_bundles <- function(
     }
   }
 
-  within_change <- estimate_bart_within_family_correlation_change(
+  within_change <- estimate_measurement_within_family_correlation_change(
     before = data,
     after = best$data,
     measurement_plan = measurement_plan

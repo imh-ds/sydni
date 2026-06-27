@@ -541,7 +541,7 @@ engine_bart <- function(
       cor_mat = structural_correlation_observed,
       between_block_shrink = between_block_shrink
     )
-    synthetic_data <- calibrate_bart_structural_bundles(
+    synthetic_data <- calibrate_measurement_structural_bundles(
       data = synthetic_data,
       measurement_plan = measurement_plan,
       target_cor = structural_correlation_target,
@@ -552,17 +552,17 @@ engine_bart <- function(
     attr(synthetic_data, "calibration") <- NULL
 
     diagnostic_covariates <- if (is.null(covariates)) character() else covariates
-    structural_covariate_correlation_observed <- estimate_bart_score_covariate_correlations(
+    structural_covariate_correlation_observed <- estimate_measurement_score_covariate_correlations(
       score_data = observed_family_scores,
       data = data,
       covariates = diagnostic_covariates
     )
-    structural_covariate_correlation_generated_raw <- estimate_bart_score_covariate_correlations(
+    structural_covariate_correlation_generated_raw <- estimate_measurement_score_covariate_correlations(
       score_data = calibration$scores_raw,
       data = feeder_data,
       covariates = diagnostic_covariates
     )
-    structural_covariate_correlation_generated <- estimate_bart_score_covariate_correlations(
+    structural_covariate_correlation_generated <- estimate_measurement_score_covariate_correlations(
       score_data = calibration$scores,
       data = feeder_data,
       covariates = diagnostic_covariates

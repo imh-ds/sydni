@@ -130,7 +130,7 @@ test_that("bart bundle calibration shrinks between families without changing rel
   target <- diag(3)
   dimnames(target) <- list(plan$family_names, plan$family_names)
 
-  calibrated <- calibrate_bart_structural_bundles(
+  calibrated <- calibrate_measurement_structural_bundles(
     data = dat,
     measurement_plan = plan,
     target_cor = target,
@@ -172,7 +172,7 @@ test_that("bart bundle calibration shrinks between families without changing rel
   expect_lt(diagnostics$within_family_correlation_max_change, 1e-12)
   expect_equal(
     calibrated,
-    calibrate_bart_structural_bundles(
+    calibrate_measurement_structural_bundles(
       data = dat,
       measurement_plan = plan,
       target_cor = target,
@@ -203,7 +203,7 @@ test_that("bart bundle calibration approaches an observed correlation target", {
   target <- estimate_brm_score_correlation(
     make_measurement_structural_score_frame(observed, plan)
   )
-  calibrated <- calibrate_bart_structural_bundles(
+  calibrated <- calibrate_measurement_structural_bundles(
     data = generated,
     measurement_plan = plan,
     target_cor = target,
@@ -480,13 +480,26 @@ test_that("measurement-aware factor engine preserves block metadata and item sup
   expect_equal(nrow(res$data), 40)
   expect_true(all(c("a1", "a2", "a3", "b1", "b2", "b3", "g") %in% names(res$data)))
   expect_true(all(res$data$a1 %in% sort(unique(dat$a1))))
-  expect_equal(res$models$x$measurement_mode, "block_one_factor")
+  expect_equal(res$models$x$measurement_mode, "block_one_factor_calibrated")
   expect_equal(res$models$x$between_block_shrink, 0.2)
   expect_equal(names(res$models$x$measurement_blocks), c("alpha", "beta"))
   expect_lt(
     abs(res$models$x$block_correlation_global["alpha", "beta"]),
     abs(res$models$x$block_correlation_global_raw["alpha", "beta"])
   )
+  expect_equal(res$models$all$measurement_mode, "block_one_factor_calibrated")
+  expect_equal(res$models$all$score_calibration_mode, "iman_conover_family_bundle")
+  expect_equal(res$models$all$score_calibration_draws, 25)
+  expect_lte(
+    res$models$all$structural_correlation_error_calibrated,
+    res$models$all$structural_correlation_error_raw
+  )
+  expect_lte(
+    res$models$all$structural_correlation_max_error_calibrated,
+    res$models$all$structural_correlation_max_error_raw
+  )
+  expect_lt(res$models$all$within_family_correlation_max_change, 1e-12)
+  expect_equal(dim(res$models$all$structural_covariate_correlation_generated), c(2, 2))
 })
 
 test_that("measurement-aware factor engine accepts cscore-style higher-order blocks", {
@@ -502,10 +515,13 @@ test_that("measurement-aware factor engine accepts cscore-style higher-order blo
     gs3 = as.integer(cut(latent_grit + rnorm(n, sd = 0.4), 5, labels = FALSE)),
     gs4 = as.integer(cut(latent_grit + rnorm(n, sd = 0.4), 5, labels = FALSE)),
     e1 = as.integer(cut(latent_e + rnorm(n, sd = 0.4), 5, labels = FALSE)),
-    e2 = as.integer(cut(latent_e + rnorm(n, sd = 0.4), 5, labels = FALSE))
+    e2 = as.integer(cut(latent_e + rnorm(n, sd = 0.4), 5, labels = FALSE)),
+    mom = rep(c(1, 2), each = n / 2),
+    dad = rep(rep(c(1, 2), each = n / 4), 2)
   )
   composite_list <- list(
     lower = list(
+      ses = c("mom", "dad"),
       consistency_interest = c("gs2", "gs3"),
       perseverance_effort = c("gs1", "gs4"),
       extraversion = c("e1", "e2")
@@ -513,12 +529,13 @@ test_that("measurement-aware factor engine accepts cscore-style higher-order blo
     higher = list(
       grit = c("consistency_interest", "perseverance_effort")
     ),
-    order = c("consistency_interest", "perseverance_effort", "extraversion", "grit")
+    order = c("ses", "consistency_interest", "perseverance_effort", "extraversion", "grit")
   )
 
   res <- engine_factor(
     data = dat,
-    variables = names(dat),
+    variables = setdiff(names(dat), c("mom", "dad")),
+    covariates = c("mom", "dad"),
     measurement_blocks = composite_list,
     n_aug = 20,
     seed = 8
@@ -526,6 +543,10 @@ test_that("measurement-aware factor engine accepts cscore-style higher-order blo
 
   expect_equal(names(res$models$all$measurement_blocks), c("extraversion", "grit"))
   expect_equal(sort(res$models$all$measurement_blocks$grit), sort(c("gs1", "gs2", "gs3", "gs4")))
+  expect_equal(res$models$all$ignored_composites, "ses")
+  expect_equal(res$models$all$measurement_mode, "block_one_factor_calibrated")
+  expect_true(all(res$data$mom %in% dat$mom))
+  expect_true(all(res$data$dad %in% dat$dad))
 })
 
 test_that("graphical engine subgroups by covariate combinations when huge is installed", {
