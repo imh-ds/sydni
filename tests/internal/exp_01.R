@@ -179,6 +179,33 @@ results$data %>%
   ) |> 
   purrr::pluck('validity')
 
+
+obs <- kdata |> 
+  cscore::composite_score(
+    composite_list = composite_list
+  )
+syd <- results$data |> 
+  cscore::composite_score(
+    composite_list = composite_list
+  )
+
+qol::cor_matrix(
+  obs,
+  vars = c("ses", "material", "dissatis", "merit", "opportunity", "chance")
+)
+qol::cor_matrix(
+  syd,
+  vars = c("ses", "material", "dissatis", "merit", "opportunity", "chance")
+)
+
+m <- results$models$all
+
+m$structural_correlation_observed
+m$structural_correlation_target
+m$structural_correlation_generated_raw
+m$structural_correlation_generated
+
+
 # # See which model is best
 # head(sydni_list$accuracy_table)
 

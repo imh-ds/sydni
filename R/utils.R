@@ -575,6 +575,180 @@ select_brm_score_predictors <- function(
   )
 }
 
+make_brm_structural_residual_donors <- function(
+    n_obs,
+    n_aug,
+    family_names,
+    seed = NA
+) {
+  if (n_obs <= 0) {
+    stop("`n_obs` must be positive.")
+  }
+  if (n_aug < 0) {
+    stop("`n_aug` must be non-negative.")
+  }
+
+  stats::setNames(
+    lapply(seq_along(family_names), function(i) {
+      with_seed(seed + i - 1L, {
+        sample.int(n_obs, size = n_aug, replace = TRUE)
+      })
+    }),
+    family_names
+  )
+}
+
+estimate_brm_score_correlation <- function(score_data) {
+  score_data <- as.data.frame(score_data)
+  p <- ncol(score_data)
+  if (p == 0) {
+    return(matrix(numeric(0), nrow = 0, ncol = 0))
+  }
+
+  if (p == 1) {
+    out <- matrix(1, nrow = 1, ncol = 1)
+    rownames(out) <- colnames(out) <- names(score_data)
+    return(out)
+  }
+
+  cor_mat <- suppressWarnings(stats::cor(
+    score_data,
+    use = "pairwise.complete.obs"
+  ))
+  cor_mat <- as.matrix(cor_mat)
+  cor_mat[!is.finite(cor_mat)] <- 0
+  cor_mat <- (cor_mat + t(cor_mat)) / 2
+  diag(cor_mat) <- 1
+  rownames(cor_mat) <- colnames(cor_mat) <- names(score_data)
+  stabilize_correlation_matrix(cor_mat)
+}
+
+calibrate_brm_structural_score_correlations <- function(
+    score_data,
+    target_cor,
+    seed = NA,
+    calibration_draws = 25L
+) {
+  score_data <- as.data.frame(score_data)
+  p <- ncol(score_data)
+  n <- nrow(score_data)
+  calibration_draws <- max(1L, as.integer(calibration_draws))
+  target_cor <- target_cor[names(score_data), names(score_data), drop = FALSE]
+  target_cor <- stabilize_correlation_matrix(target_cor)
+  raw_cor <- estimate_brm_score_correlation(score_data)
+  raw_error <- summarize_brm_structural_correlation_error(raw_cor, target_cor)
+
+  if (p < 2 || n < 3) {
+    attr(score_data, "calibration") <- list(
+      correlation = raw_cor,
+      error = raw_error$mean,
+      max_error = raw_error$max,
+      raw_error = raw_error$mean,
+      raw_max_error = raw_error$max,
+      draws = calibration_draws,
+      selected_draw = NA_integer_
+    )
+    return(score_data)
+  }
+
+  best <- NULL
+
+  for (draw in seq_len(calibration_draws)) {
+    draw_seed <- if (length(seed) == 1 && is.finite(seed) && !is.na(seed)) {
+      seed + draw - 1L
+    } else {
+      NA_real_
+    }
+
+    candidate <- calibrate_brm_structural_score_correlations_once(
+      score_data = score_data,
+      target_cor = target_cor,
+      seed = draw_seed
+    )
+    candidate_cor <- estimate_brm_score_correlation(candidate)
+    candidate_error <- summarize_brm_structural_correlation_error(candidate_cor, target_cor)
+
+    if (
+      is.null(best) ||
+        candidate_error$max < best$max_error ||
+        (
+          isTRUE(all.equal(candidate_error$max, best$max_error, tolerance = 1e-12)) &&
+            candidate_error$mean < best$error
+        )
+    ) {
+      best <- list(
+        data = candidate,
+        correlation = candidate_cor,
+        error = candidate_error$mean,
+        max_error = candidate_error$max,
+        selected_draw = draw
+      )
+    }
+  }
+
+  attr(best$data, "calibration") <- list(
+    correlation = best$correlation,
+    error = best$error,
+    max_error = best$max_error,
+    raw_error = raw_error$mean,
+    raw_max_error = raw_error$max,
+    draws = calibration_draws,
+    selected_draw = best$selected_draw
+  )
+  best$data
+}
+
+calibrate_brm_structural_score_correlations_once <- function(
+    score_data,
+    target_cor,
+    seed = NA
+) {
+  n <- nrow(score_data)
+  p <- ncol(score_data)
+
+  latent <- with_seed(seed, {
+    matrix(stats::rnorm(n * p), nrow = n, ncol = p)
+  })
+  latent <- scale(latent)
+  latent[!is.finite(latent)] <- 0
+
+  latent_cor <- suppressWarnings(stats::cor(latent))
+  latent_cor[!is.finite(latent_cor)] <- 0
+  latent_cor <- stabilize_correlation_matrix(latent_cor)
+  latent_chol <- chol(latent_cor)
+  target_chol <- chol(target_cor)
+  latent_target <- latent %*% solve(latent_chol, target_chol)
+  colnames(latent_target) <- names(score_data)
+
+  out <- score_data
+  for (col in names(score_data)) {
+    target_order <- order(latent_target[, col], seq_len(n), na.last = TRUE)
+    values <- sort(score_data[[col]], na.last = TRUE)
+    calibrated <- score_data[[col]]
+    calibrated[target_order] <- values
+    out[[col]] <- calibrated
+  }
+
+  out
+}
+
+summarize_brm_structural_correlation_error <- function(cor_mat, target_cor) {
+  cor_mat <- cor_mat[rownames(target_cor), colnames(target_cor), drop = FALSE]
+  err <- abs(cor_mat - target_cor)
+  err[!is.finite(err)] <- 0
+  diag(err) <- 0
+  offdiag <- err[row(err) != col(err)]
+
+  if (length(offdiag) == 0) {
+    return(list(mean = 0, max = 0))
+  }
+
+  list(
+    mean = mean(offdiag),
+    max = max(offdiag)
+  )
+}
+
 simulate_brm_leaf_scores <- function(
     synthetic_family_scores,
     observed_family_scores,

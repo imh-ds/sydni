@@ -134,6 +134,32 @@ nearest observed leaf-score donors. This path is designed for psychometric
 augmentation where within-scale reliability should be preserved while
 between-construct relations are made conservative.
 
+In the measurement-aware path, shrinkage is applied at the structural-family
+layer rather than at the item layer. Same-family leaf blocks are reconstructed
+without additional shrinkage, while between-family relations are constrained
+through limited predictor selection, stronger role-specific priors,
+independent residual donor rows for each structural family, and a final
+Iman-Conover style rank calibration of the generated structural family scores. If
+\eqn{R_{\mathrm{obs}}} is the observed structural score correlation matrix,
+SYDNI targets
+\deqn{
+  R_{\mathrm{target},jk} =
+  \begin{cases}
+    1, & j = k,\\
+    \lambda R_{\mathrm{obs},jk}, & j \ne k,
+  \end{cases}
+}
+where \eqn{\lambda =} \code{between_block_shrink}. The calibration step
+uses candidate Iman-Conover rank transformations and chooses the candidate
+with the smallest off-diagonal correlation error against
+\eqn{R_{\mathrm{target}}}. This preserves each generated family-score
+column's marginal values while moving cross-family dependence toward the
+shrunk structural target. Item responses are then reconstructed after this
+score-level calibration, so the donor-based measurement layer remains
+unchanged. Final item-level composite correlations can still differ slightly
+from the structural score target because donor reconstruction preserves
+coherent observed item patterns.
+
 Let \eqn{D = \{x_i\}_{i=1}^{n_{\mathrm{obs}}}} be the observed data,
 \eqn{V = \{v_1,\ldots,v_p\}} be the synthesized variables, and
 \eqn{C = \{c_1,\ldots,c_q\}} be optional covariates. The requested synthetic
@@ -307,9 +333,10 @@ where \eqn{C_{\mathrm{feeder}}} is included only when \code{covariates} are
 supplied. The returned \code{models} element contains the fitted \pkg{brms}
 model for each synthesized target in the legacy path. In the
 measurement-aware path, \code{models$all} stores the structural-family BRM
-models, measurement plan, predictor roles, donor settings, and ignored
-non-synthesized composites. The returned \code{data} element always contains
-item-level synthetic rows.
+models, measurement plan, predictor roles, donor settings, residual donor
+mode, structural score calibration matrices, calibration error diagnostics,
+and ignored non-synthesized composites. The returned \code{data} element
+always contains item-level synthetic rows.
 
 The BRM engine should be interpreted as a robustness and sensitivity-analysis
 engine. It does not make synthetic rows into additional empirical evidence,

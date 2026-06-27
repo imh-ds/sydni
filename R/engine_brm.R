@@ -24,6 +24,32 @@
 #' augmentation where within-scale reliability should be preserved while
 #' between-construct relations are made conservative.
 #'
+#' In the measurement-aware path, shrinkage is applied at the structural-family
+#' layer rather than at the item layer. Same-family leaf blocks are reconstructed
+#' without additional shrinkage, while between-family relations are constrained
+#' through limited predictor selection, stronger role-specific priors,
+#' independent residual donor rows for each structural family, and a final
+#' Iman-Conover style rank calibration of the generated structural family scores. If
+#' \eqn{R_{\mathrm{obs}}} is the observed structural score correlation matrix,
+#' SYDNI targets
+#' \deqn{
+#'   R_{\mathrm{target},jk} =
+#'   \begin{cases}
+#'     1, & j = k,\\
+#'     \lambda R_{\mathrm{obs},jk}, & j \ne k,
+#'   \end{cases}
+#' }
+#' where \eqn{\lambda =} \code{between_block_shrink}. The calibration step
+#' uses candidate Iman-Conover rank transformations and chooses the candidate
+#' with the smallest off-diagonal correlation error against
+#' \eqn{R_{\mathrm{target}}}. This preserves each generated family-score
+#' column's marginal values while moving cross-family dependence toward the
+#' shrunk structural target. Item responses are then reconstructed after this
+#' score-level calibration, so the donor-based measurement layer remains
+#' unchanged. Final item-level composite correlations can still differ slightly
+#' from the structural score target because donor reconstruction preserves
+#' coherent observed item patterns.
+#'
 #' Let \eqn{D = \{x_i\}_{i=1}^{n_{\mathrm{obs}}}} be the observed data,
 #' \eqn{V = \{v_1,\ldots,v_p\}} be the synthesized variables, and
 #' \eqn{C = \{c_1,\ldots,c_q\}} be optional covariates. The requested synthetic
@@ -197,9 +223,10 @@
 #' supplied. The returned \code{models} element contains the fitted \pkg{brms}
 #' model for each synthesized target in the legacy path. In the
 #' measurement-aware path, \code{models$all} stores the structural-family BRM
-#' models, measurement plan, predictor roles, donor settings, and ignored
-#' non-synthesized composites. The returned \code{data} element always contains
-#' item-level synthetic rows.
+#' models, measurement plan, predictor roles, donor settings, residual donor
+#' mode, structural score calibration matrices, calibration error diagnostics,
+#' and ignored non-synthesized composites. The returned \code{data} element
+#' always contains item-level synthetic rows.
 #'
 #' The BRM engine should be interpreted as a robustness and sensitivity-analysis
 #' engine. It does not make synthetic rows into additional empirical evidence,
@@ -605,6 +632,12 @@ engine_brm_block_score <- function(
     sample.int(nrow(data), size = n_aug, replace = replace)
   )
   sampled_model_data <- model_data[sampled_indices, , drop = FALSE]
+  structural_residual_donors <- make_brm_structural_residual_donors(
+    n_obs = nrow(data),
+    n_aug = n_aug,
+    family_names = measurement_plan$family_names,
+    seed = seed + length(measurement_plan$family_names) + 3000L
+  )
 
   formula_info <- stats::setNames(
     lapply(seq_along(measurement_plan$family_names), function(i) {
@@ -702,7 +735,7 @@ engine_brm_block_score <- function(
           epred_train = epred_train,
           y_train = model_data[[target_col]],
           template = model_data[[target_col]],
-          donor_rows = sampled_indices
+          donor_rows = structural_residual_donors[[family_name]]
         )
       })
 
@@ -728,6 +761,25 @@ engine_brm_block_score <- function(
     purrr::map_dfc(score_models, "value")
   )
   names(synthetic_family_scores) <- measurement_plan$family_names
+
+  structural_correlation_observed <- estimate_brm_score_correlation(family_scores)
+  structural_correlation_target <- apply_between_block_shrinkage(
+    cor_mat = structural_correlation_observed,
+    between_block_shrink = between_block_shrink
+  )
+  structural_correlation_generated_raw <- estimate_brm_score_correlation(synthetic_family_scores)
+  synthetic_family_scores <- calibrate_brm_structural_score_correlations(
+    score_data = synthetic_family_scores,
+    target_cor = structural_correlation_target,
+    seed = seed + length(measurement_plan$family_names) + 4000L,
+    calibration_draws = 25L
+  )
+  structural_calibration <- attr(synthetic_family_scores, "calibration")
+  structural_correlation_generated <- if (!is.null(structural_calibration$correlation)) {
+    structural_calibration$correlation
+  } else {
+    estimate_brm_score_correlation(synthetic_family_scores)
+  }
 
   synthetic_leaf_scores <- simulate_brm_leaf_scores(
     synthetic_family_scores = synthetic_family_scores,
@@ -773,6 +825,18 @@ engine_brm_block_score <- function(
           donor_k = 5L,
           item_reconstruction = "copy_full_leaf_block"
         ),
+        residual_donor_mode = "independent_by_structural_family",
+        score_calibration_mode = "iman_conover_rank_target",
+        score_calibration_draws = structural_calibration$draws,
+        score_calibration_selected_draw = structural_calibration$selected_draw,
+        structural_correlation_observed = structural_correlation_observed,
+        structural_correlation_target = structural_correlation_target,
+        structural_correlation_generated_raw = structural_correlation_generated_raw,
+        structural_correlation_generated = structural_correlation_generated,
+        structural_correlation_error_raw = structural_calibration$raw_error,
+        structural_correlation_error_calibrated = structural_calibration$error,
+        structural_correlation_max_error_raw = structural_calibration$raw_max_error,
+        structural_correlation_max_error_calibrated = structural_calibration$max_error,
         ignored_composites = measurement_plan$ignored_composites,
         between_block_shrink = between_block_shrink,
         predictor_k = predictor_k

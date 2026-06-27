@@ -147,6 +147,127 @@ test_that("coherent gaussian epred sampler uses supplied residual donor rows", {
   expect_equal(out, c(5, 5, 3))
 })
 
+test_that("brm structural residual donors are independent by family", {
+  donors <- make_brm_structural_residual_donors(
+    n_obs = 25,
+    n_aug = 12,
+    family_names = c("alpha", "beta", "gamma"),
+    seed = 10
+  )
+
+  expect_equal(names(donors), c("alpha", "beta", "gamma"))
+  expect_length(donors$alpha, 12)
+  expect_true(all(donors$alpha >= 1 & donors$alpha <= 25))
+  expect_false(identical(donors$alpha, donors$beta))
+  expect_false(identical(donors$beta, donors$gamma))
+})
+
+test_that("brm structural score calibration preserves marginals and shrinks correlations", {
+  set.seed(11)
+  n <- 800
+  x <- rnorm(n)
+  raw_scores <- data.frame(
+    alpha = x,
+    beta = x + rnorm(n, sd = 0.1),
+    gamma = rnorm(n)
+  )
+  target_cor <- diag(3)
+  rownames(target_cor) <- colnames(target_cor) <- names(raw_scores)
+
+  calibrated <- calibrate_brm_structural_score_correlations(
+    score_data = raw_scores,
+    target_cor = target_cor,
+    seed = 12,
+    calibration_draws = 25L
+  )
+  calibration <- attr(calibrated, "calibration")
+
+  expect_equal(sort(calibrated$alpha), sort(raw_scores$alpha))
+  expect_equal(sort(calibrated$beta), sort(raw_scores$beta))
+  expect_equal(sort(calibrated$gamma), sort(raw_scores$gamma))
+  expect_lt(calibration$error, calibration$raw_error)
+  expect_lt(calibration$max_error, calibration$raw_max_error)
+  expect_lt(
+    abs(stats::cor(calibrated$alpha, calibrated$beta)),
+    abs(stats::cor(raw_scores$alpha, raw_scores$beta))
+  )
+  expect_lt(abs(stats::cor(calibrated$alpha, calibrated$beta)), 0.15)
+})
+
+test_that("brm structural score calibration can target observed score correlations", {
+  set.seed(13)
+  n <- 1000
+  target_cor <- matrix(
+    c(
+      1.00, 0.55, -0.25,
+      0.55, 1.00, 0.20,
+      -0.25, 0.20, 1.00
+    ),
+    nrow = 3,
+    byrow = TRUE
+  )
+  colnames(target_cor) <- rownames(target_cor) <- c("alpha", "beta", "gamma")
+  raw_scores <- data.frame(
+    alpha = rt(n, df = 6),
+    beta = rnorm(n),
+    gamma = runif(n, min = -2, max = 2)
+  )
+
+  calibrated <- calibrate_brm_structural_score_correlations(
+    score_data = raw_scores,
+    target_cor = target_cor,
+    seed = 14,
+    calibration_draws = 25L
+  )
+  calibrated_cor <- stats::cor(calibrated)
+  calibration <- attr(calibrated, "calibration")
+
+  expect_equal(sort(calibrated$gamma), sort(raw_scores$gamma))
+  expect_equal(calibration$draws, 25L)
+  expect_lt(abs(calibrated_cor["alpha", "beta"] - target_cor["alpha", "beta"]), 0.15)
+  expect_lt(abs(calibrated_cor["alpha", "gamma"] - target_cor["alpha", "gamma"]), 0.15)
+  expect_lt(abs(calibrated_cor["beta", "gamma"] - target_cor["beta", "gamma"]), 0.15)
+})
+
+test_that("brm structural score calibration selects the best candidate draw", {
+  set.seed(15)
+  n <- 600
+  raw_scores <- data.frame(
+    alpha = rnorm(n),
+    beta = rexp(n),
+    gamma = stats::rt(n, df = 5)
+  )
+  target_cor <- matrix(
+    c(
+      1.0, 0.4, 0.2,
+      0.4, 1.0, -0.3,
+      0.2, -0.3, 1.0
+    ),
+    nrow = 3,
+    byrow = TRUE
+  )
+  rownames(target_cor) <- colnames(target_cor) <- names(raw_scores)
+
+  one_draw <- calibrate_brm_structural_score_correlations(
+    score_data = raw_scores,
+    target_cor = target_cor,
+    seed = 16,
+    calibration_draws = 1L
+  )
+  many_draws <- calibrate_brm_structural_score_correlations(
+    score_data = raw_scores,
+    target_cor = target_cor,
+    seed = 16,
+    calibration_draws = 25L
+  )
+  one_meta <- attr(one_draw, "calibration")
+  many_meta <- attr(many_draws, "calibration")
+
+  expect_true(many_meta$max_error <= one_meta$max_error + 1e-12)
+  expect_equal(many_meta$draws, 25L)
+  expect_true(many_meta$selected_draw %in% seq_len(25L))
+})
+
 test_that("two-item brm donor reconstruction uses rank-matched full item pairs", {
   data <- data.frame(
     a1 = c(1, 2, 4, 5),
@@ -217,6 +338,15 @@ test_that("measurement-aware brm engine uses block-score donor reconstruction", 
   expect_equal(names(out$models$all$structural_families), "alpha")
   expect_equal(out$models$all$donor_settings$method, "nearest_leaf_score")
   expect_equal(out$models$all$donor_settings$two_item_method, "rank_quantile_leaf_score")
+  expect_equal(out$models$all$residual_donor_mode, "independent_by_structural_family")
+  expect_equal(out$models$all$score_calibration_mode, "iman_conover_rank_target")
+  expect_equal(out$models$all$score_calibration_draws, 25L)
+  expect_true(is.matrix(out$models$all$structural_correlation_target))
+  expect_equal(dim(out$models$all$structural_correlation_target), c(1L, 1L))
+  expect_equal(out$models$all$structural_correlation_error_raw, 0)
+  expect_equal(out$models$all$structural_correlation_error_calibrated, 0)
+  expect_equal(out$models$all$structural_correlation_max_error_raw, 0)
+  expect_equal(out$models$all$structural_correlation_max_error_calibrated, 0)
   expect_true(all(out$data$a1 %in% sort(unique(df$a1))))
   expect_true(all(out$data$a2 %in% sort(unique(df$a2))))
   expect_gt(stats::cor(out$data$a1, out$data$a2), 0.5)
