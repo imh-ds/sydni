@@ -154,7 +154,9 @@ dataset with controlled noise injection.
   item-family bundles while calibrating realized between-family score
   correlations toward a uniformly shrunk structural target.
 - `"graphical"` fits subgroup-aware sparse Gaussian graphical models with
-  empirical marginal reconstruction.
+  empirical marginal reconstruction. With `measurement_blocks`, it restores
+  within-family latent correlations and calibrates realized between-family
+  score correlations toward a uniformly shrunk structural target.
 
 SYDNI is intended for robustness, sensitivity, and workflow stress-testing.
 It is not a general solution for recovering population truth from undersized

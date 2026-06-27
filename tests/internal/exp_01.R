@@ -151,7 +151,7 @@ results <- sydni(
     variables = vars,
     covariates = covars,
     engine = "bart",
-    # measurement_blocks = composite_list,
+    measurement_blocks = composite_list,
     n_aug = nrow(cdata)-nrow(sdata),
     families = families,
     # predictor_k = 2,
@@ -200,10 +200,11 @@ qol::cor_matrix(
 
 m <- results$models$all
 
-m$structural_correlation_observed
 m$structural_correlation_target
-m$structural_correlation_generated_raw
 m$structural_correlation_generated
+m$structural_correlation_error_raw
+m$structural_correlation_error_calibrated
+m$within_family_correlation_max_change
 
 
 # # See which model is best

@@ -56,18 +56,21 @@ rows before model fitting.}
 `transform`, `selection`, `ebic_gamma`, `lambda_fixed`, and `pd_tol`.}
 
 \item{measurement_blocks}{Optional named list defining item blocks whose
-within-block latent correlations should be preserved while between-block
-latent correlations are shrunk. Also accepts a
+within-family latent and generated measurement structure should be
+preserved while between-family dependence is shrunk. Also accepts a
 `cscore::composite_list()`-style list with `lower` and `higher` elements.}
 
 \item{between_block_shrink}{Optional numeric value in `[0, 1]`. When
-`measurement_blocks` is supplied, between-block latent correlations are
-multiplied by this value. Defaults to `0.50`.}
+`measurement_blocks` is supplied, this multiplies both between-family
+latent correlations and the final realized structural-correlation target.
+Defaults to `0.50`.}
 
 \item{seed}{Numeric. Seed for reproducibility.}
 }
 \value{
-A named list with elements `models` and `data`.
+A named list with elements `models` and `data`. In
+  measurement-aware mode, \code{models$all} contains shared structural
+  calibration metadata.
 }
 \description{
 Fits subgroup-aware sparse Gaussian graphical models on feeder data and
@@ -211,13 +214,59 @@ The engine proceeds in eight steps:
     \code{round_int = TRUE}.
 }
 
+When \code{measurement_blocks} is supplied, graphical synthesis uses a
+two-layer measurement-aware path. Plain named lists define leaf measurement
+blocks and final structural families. For
+\code{cscore::composite_list()}-style inputs, lower-order item batteries
+remain leaves and batteries referenced by a higher-order composite are
+combined into one structural family. Composites containing no synthesized
+variables are recorded as ignored, unblocked synthesized variables become
+singleton families, and one leaf cannot belong to multiple final families.
+
+The first layer operates on the graphical simulation matrix. If
+\eqn{M_\lambda} has diagonal and within-family entries equal to one and
+between-family entries equal to \eqn{\lambda}, the graphical latent
+correlation is initially adjusted as
+\deqn{
+  \widetilde{\Sigma}_g = \Sigma_g \circ M_\lambda.
+}
+Observed global within-family correlation submatrices are then restored after
+shrinkage and positive-definite stabilization. The sparse precision estimate
+from \pkg{huge} remains available as the conditional-dependence model; the
+restored correlation matrix is the matrix used for latent simulation.
+
+The second layer controls realized structural-family scores. Let
+\eqn{R_{\mathrm{obs}}} be their correlation matrix in the exact input
+\code{data}. The final target is
+\deqn{
+  R_{\mathrm{target}} = I +
+  \lambda (R_{\mathrm{obs}} - I),
+}
+where \eqn{\lambda} is \code{between_block_shrink}. After subgroup outputs
+are stacked, twenty-five deterministic Iman-Conover-style candidate
+calibrations are evaluated. Each candidate applies one row permutation to
+every item in a structural family, and target error is recomputed from the
+resulting item data. Selection minimizes maximum off-diagonal error and then
+mean absolute error. The raw graphical output is candidate zero, so the
+selected calibration cannot worsen either target-error criterion.
+
+Moving complete families together leaves their generated multivariate item
+distributions unchanged. The calibration stage therefore preserves item
+margins and support, within-family correlations, lower-order relations within
+a higher-order family, alpha, composite reliability, and AVE. Covariates are
+carried through but are not calibration targets; their observed, raw, and
+calibrated structural associations are retained as diagnostics.
+
 The final synthetic dataset is formed by stacking subgroup outputs. If
 \code{covariates} are supplied, each synthetic subgroup block receives the
 corresponding covariate values for that subgroup. The returned
 \code{models} element stores, for each subgroup, the selected precision
 matrix when available, the stabilized latent correlation matrix, the
 \pkg{huge} selection object, the fitted \pkg{huge} path, fallback status, and
-active variable names.
+active variable names. In measurement-aware mode, \code{models$all} also
+stores the hierarchy, structural targets, realized raw and calibrated
+correlations, target errors, within-family invariance diagnostics, and
+covariate diagnostics.
 
 This engine should be used when sparse direct dependence is substantively
 meaningful; it is not a drop-in replacement for the dense

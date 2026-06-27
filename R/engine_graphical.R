@@ -142,13 +142,59 @@
 #'     \code{round_int = TRUE}.
 #' }
 #'
+#' When \code{measurement_blocks} is supplied, graphical synthesis uses a
+#' two-layer measurement-aware path. Plain named lists define leaf measurement
+#' blocks and final structural families. For
+#' \code{cscore::composite_list()}-style inputs, lower-order item batteries
+#' remain leaves and batteries referenced by a higher-order composite are
+#' combined into one structural family. Composites containing no synthesized
+#' variables are recorded as ignored, unblocked synthesized variables become
+#' singleton families, and one leaf cannot belong to multiple final families.
+#'
+#' The first layer operates on the graphical simulation matrix. If
+#' \eqn{M_\lambda} has diagonal and within-family entries equal to one and
+#' between-family entries equal to \eqn{\lambda}, the graphical latent
+#' correlation is initially adjusted as
+#' \deqn{
+#'   \widetilde{\Sigma}_g = \Sigma_g \circ M_\lambda.
+#' }
+#' Observed global within-family correlation submatrices are then restored after
+#' shrinkage and positive-definite stabilization. The sparse precision estimate
+#' from \pkg{huge} remains available as the conditional-dependence model; the
+#' restored correlation matrix is the matrix used for latent simulation.
+#'
+#' The second layer controls realized structural-family scores. Let
+#' \eqn{R_{\mathrm{obs}}} be their correlation matrix in the exact input
+#' \code{data}. The final target is
+#' \deqn{
+#'   R_{\mathrm{target}} = I +
+#'   \lambda (R_{\mathrm{obs}} - I),
+#' }
+#' where \eqn{\lambda} is \code{between_block_shrink}. After subgroup outputs
+#' are stacked, twenty-five deterministic Iman-Conover-style candidate
+#' calibrations are evaluated. Each candidate applies one row permutation to
+#' every item in a structural family, and target error is recomputed from the
+#' resulting item data. Selection minimizes maximum off-diagonal error and then
+#' mean absolute error. The raw graphical output is candidate zero, so the
+#' selected calibration cannot worsen either target-error criterion.
+#'
+#' Moving complete families together leaves their generated multivariate item
+#' distributions unchanged. The calibration stage therefore preserves item
+#' margins and support, within-family correlations, lower-order relations within
+#' a higher-order family, alpha, composite reliability, and AVE. Covariates are
+#' carried through but are not calibration targets; their observed, raw, and
+#' calibrated structural associations are retained as diagnostics.
+#'
 #' The final synthetic dataset is formed by stacking subgroup outputs. If
 #' \code{covariates} are supplied, each synthetic subgroup block receives the
 #' corresponding covariate values for that subgroup. The returned
 #' \code{models} element stores, for each subgroup, the selected precision
 #' matrix when available, the stabilized latent correlation matrix, the
 #' \pkg{huge} selection object, the fitted \pkg{huge} path, fallback status, and
-#' active variable names.
+#' active variable names. In measurement-aware mode, \code{models$all} also
+#' stores the hierarchy, structural targets, realized raw and calibrated
+#' correlations, target errors, within-family invariance diagnostics, and
+#' covariate diagnostics.
 #'
 #' This engine should be used when sparse direct dependence is substantively
 #' meaningful; it is not a drop-in replacement for the dense
@@ -173,15 +219,18 @@
 #' @param engine_control Optional named list. Supported elements include
 #'   `transform`, `selection`, `ebic_gamma`, `lambda_fixed`, and `pd_tol`.
 #' @param measurement_blocks Optional named list defining item blocks whose
-#'   within-block latent correlations should be preserved while between-block
-#'   latent correlations are shrunk. Also accepts a
+#'   within-family latent and generated measurement structure should be
+#'   preserved while between-family dependence is shrunk. Also accepts a
 #'   `cscore::composite_list()`-style list with `lower` and `higher` elements.
 #' @param between_block_shrink Optional numeric value in `[0, 1]`. When
-#'   `measurement_blocks` is supplied, between-block latent correlations are
-#'   multiplied by this value. Defaults to `0.50`.
+#'   `measurement_blocks` is supplied, this multiplies both between-family
+#'   latent correlations and the final realized structural-correlation target.
+#'   Defaults to `0.50`.
 #' @param seed Numeric. Seed for reproducibility.
 #'
-#' @return A named list with elements `models` and `data`.
+#' @return A named list with elements `models` and `data`. In
+#'   measurement-aware mode, \code{models$all} contains shared structural
+#'   calibration metadata.
 #'
 #' @export
 engine_graphical <- function(
@@ -228,10 +277,22 @@ engine_graphical <- function(
     engine_control
   )
 
-  normalized_blocks <- as_measurement_blocks(
-    measurement_blocks = measurement_blocks,
-    variables = variables
-  )
+  measurement_plan <- if (is.null(measurement_blocks)) {
+    NULL
+  } else {
+    make_measurement_score_plan(
+      measurement_blocks = measurement_blocks,
+      variables = variables
+    )
+  }
+  normalized_blocks <- if (is.null(measurement_plan)) {
+    NULL
+  } else {
+    stats::setNames(
+      lapply(measurement_plan$structural_families, function(x) x$variables),
+      measurement_plan$family_names
+    )
+  }
   if (!is.null(normalized_blocks) && is.null(between_block_shrink)) {
     between_block_shrink <- 0.5
   }
@@ -414,7 +475,7 @@ engine_graphical <- function(
             huge_fit = graph_fit,
             fallback = fallback,
             active_variables = variables[active],
-            measurement_mode = if (!is.null(normalized_blocks)) "block_graphical" else NULL,
+            measurement_mode = if (!is.null(normalized_blocks)) "block_graphical_calibrated" else NULL,
             measurement_blocks = normalized_blocks,
             between_block_shrink = between_block_shrink
           ),
@@ -425,8 +486,91 @@ engine_graphical <- function(
     group_plan$groups
   )
 
+  synthetic_data_raw <- purrr::map_dfr(synth_predict, "df")
+  models <- purrr::map(synth_predict, "model")
+
+  if (is.null(measurement_plan)) {
+    return(list(
+      models = models,
+      data = synthetic_data_raw
+    ))
+  }
+
+  observed_family_scores <- make_measurement_structural_score_frame(
+    data = data,
+    measurement_plan = measurement_plan
+  )
+  structural_correlation_observed <- estimate_brm_score_correlation(
+    observed_family_scores
+  )
+  structural_correlation_target <- apply_between_block_shrinkage(
+    cor_mat = structural_correlation_observed,
+    between_block_shrink = between_block_shrink
+  )
+  synthetic_data <- calibrate_measurement_structural_bundles(
+    data = synthetic_data_raw,
+    measurement_plan = measurement_plan,
+    target_cor = structural_correlation_target,
+    seed = seed + length(measurement_plan$family_names) + 4000L,
+    calibration_draws = 25L
+  )
+  calibration <- attr(synthetic_data, "calibration")
+  attr(synthetic_data, "calibration") <- NULL
+
+  diagnostic_covariates <- if (is.null(covariates)) character() else covariates
+  structural_covariate_correlation_observed <- estimate_measurement_score_covariate_correlations(
+    score_data = observed_family_scores,
+    data = data,
+    covariates = diagnostic_covariates
+  )
+  structural_covariate_correlation_generated_raw <- estimate_measurement_score_covariate_correlations(
+    score_data = calibration$scores_raw,
+    data = synthetic_data_raw,
+    covariates = diagnostic_covariates
+  )
+  structural_covariate_correlation_generated <- estimate_measurement_score_covariate_correlations(
+    score_data = calibration$scores,
+    data = synthetic_data,
+    covariates = diagnostic_covariates
+  )
+
+  shared_metadata <- list(
+    measurement_mode = "block_graphical_calibrated",
+    measurement_blocks = normalized_blocks,
+    leaf_blocks = measurement_plan$leaf_blocks,
+    structural_families = measurement_plan$structural_families,
+    ignored_composites = measurement_plan$ignored_composites,
+    between_block_shrink = between_block_shrink,
+    correlation_global_reference = cor_global_reference,
+    structural_correlation_reference = "input_data",
+    structural_correlation_observed = structural_correlation_observed,
+    structural_correlation_target = structural_correlation_target,
+    structural_correlation_generated_raw = calibration$correlation_raw,
+    structural_correlation_generated = calibration$correlation,
+    structural_correlation_error_raw = calibration$error_raw,
+    structural_correlation_error_calibrated = calibration$error,
+    structural_correlation_max_error_raw = calibration$max_error_raw,
+    structural_correlation_max_error_calibrated = calibration$max_error,
+    score_calibration_mode = "iman_conover_family_bundle",
+    score_calibration_draws = calibration$draws,
+    score_calibration_selected_draw = calibration$selected_draw,
+    score_calibration_fallback_reason = calibration$fallback_reason,
+    within_family_correlation_change = calibration$within_family_correlation_change,
+    within_family_correlation_max_change = calibration$within_family_correlation_max_change,
+    covariate_calibration_scope = "diagnostic_only",
+    structural_covariate_correlation_observed = structural_covariate_correlation_observed,
+    structural_covariate_correlation_generated_raw = structural_covariate_correlation_generated_raw,
+    structural_covariate_correlation_generated = structural_covariate_correlation_generated
+  )
+
+  if ("all" %in% names(models)) {
+    models$all <- utils::modifyList(models$all, shared_metadata)
+  } else {
+    models$all <- shared_metadata
+  }
+
   list(
-    models = purrr::map(synth_predict, "model"),
-    data = purrr::map_dfr(synth_predict, "df")
+    models = models,
+    data = synthetic_data
   )
 }

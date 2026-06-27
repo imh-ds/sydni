@@ -597,7 +597,7 @@ test_that("measurement-aware graphical engine preserves block metadata and item 
   expect_equal(nrow(res$data), 40)
   expect_true(all(c("a1", "a2", "a3", "b1", "b2", "b3", "g") %in% names(res$data)))
   expect_true(all(res$data$a1 %in% sort(unique(dat$a1))))
-  expect_equal(res$models$x$measurement_mode, "block_graphical")
+  expect_equal(res$models$x$measurement_mode, "block_graphical_calibrated")
   expect_equal(res$models$x$between_block_shrink, 0.2)
   expect_equal(names(res$models$x$measurement_blocks), c("alpha", "beta"))
   expect_gt(
@@ -608,6 +608,19 @@ test_that("measurement-aware graphical engine preserves block metadata and item 
     abs(res$models$x$correlation_measurement_adjusted["a1", "b1"]),
     abs(res$models$x$correlation_raw["a1", "b1"])
   )
+  expect_equal(res$models$all$measurement_mode, "block_graphical_calibrated")
+  expect_equal(res$models$all$score_calibration_mode, "iman_conover_family_bundle")
+  expect_equal(res$models$all$score_calibration_draws, 25)
+  expect_lte(
+    res$models$all$structural_correlation_error_calibrated,
+    res$models$all$structural_correlation_error_raw
+  )
+  expect_lte(
+    res$models$all$structural_correlation_max_error_calibrated,
+    res$models$all$structural_correlation_max_error_raw
+  )
+  expect_lt(res$models$all$within_family_correlation_max_change, 1e-12)
+  expect_equal(dim(res$models$all$structural_covariate_correlation_generated), c(2, 2))
 })
 
 test_that("measurement-aware graphical engine accepts cscore-style higher-order blocks", {
@@ -623,10 +636,13 @@ test_that("measurement-aware graphical engine accepts cscore-style higher-order 
     gs3 = as.integer(cut(latent_grit + rnorm(n, sd = 0.4), 5, labels = FALSE)),
     gs4 = as.integer(cut(latent_grit + rnorm(n, sd = 0.4), 5, labels = FALSE)),
     e1 = as.integer(cut(latent_e + rnorm(n, sd = 0.4), 5, labels = FALSE)),
-    e2 = as.integer(cut(latent_e + rnorm(n, sd = 0.4), 5, labels = FALSE))
+    e2 = as.integer(cut(latent_e + rnorm(n, sd = 0.4), 5, labels = FALSE)),
+    mom = rep(c(1, 2), each = n / 2),
+    dad = rep(rep(c(1, 2), each = n / 4), 2)
   )
   composite_list <- list(
     lower = list(
+      ses = c("mom", "dad"),
       consistency_interest = c("gs2", "gs3"),
       perseverance_effort = c("gs1", "gs4"),
       extraversion = c("e1", "e2")
@@ -634,12 +650,13 @@ test_that("measurement-aware graphical engine accepts cscore-style higher-order 
     higher = list(
       grit = c("consistency_interest", "perseverance_effort")
     ),
-    order = c("consistency_interest", "perseverance_effort", "extraversion", "grit")
+    order = c("ses", "consistency_interest", "perseverance_effort", "extraversion", "grit")
   )
 
   res <- engine_graphical(
     data = dat,
-    variables = names(dat),
+    variables = setdiff(names(dat), c("mom", "dad")),
+    covariates = c("mom", "dad"),
     measurement_blocks = composite_list,
     n_aug = 20,
     engine_control = list(transform = "scale", selection = "fixed_lambda", lambda_fixed = 0.01),
@@ -648,7 +665,10 @@ test_that("measurement-aware graphical engine accepts cscore-style higher-order 
 
   expect_equal(names(res$models$all$measurement_blocks), c("extraversion", "grit"))
   expect_equal(sort(res$models$all$measurement_blocks$grit), sort(c("gs1", "gs2", "gs3", "gs4")))
-  expect_equal(res$models$all$measurement_mode, "block_graphical")
+  expect_equal(res$models$all$measurement_mode, "block_graphical_calibrated")
+  expect_equal(res$models$all$ignored_composites, "ses")
+  expect_true(all(res$data$mom %in% dat$mom))
+  expect_true(all(res$data$dad %in% dat$dad))
 })
 
 test_that("measurement-aware graphical fallback still records measurement metadata", {
@@ -669,6 +689,6 @@ test_that("measurement-aware graphical fallback still records measurement metada
   )
 
   expect_true(res$models$all$fallback)
-  expect_equal(res$models$all$measurement_mode, "block_graphical")
+  expect_equal(res$models$all$measurement_mode, "block_graphical_calibrated")
   expect_equal(names(res$models$all$measurement_blocks), "alpha")
 })
