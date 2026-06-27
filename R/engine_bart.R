@@ -121,9 +121,10 @@
 #'     residual-donor row is used across targets for a synthetic observation, so
 #'     residual variation preserves cross-item covariance instead of adding
 #'     independent item-wise noise. When measurement blocks are supplied, the
-#'     donor row is shared within each block but sampled independently across
-#'     blocks, preserving measurement families while allowing between-block
-#'     relations to remain conservative. This step is important for ordinal item
+#'     donor row is shared within each final structural family but sampled
+#'     independently across families, preserving measurement families while
+#'     allowing between-family relations to remain conservative. This step is
+#'     important for ordinal item
 #'     batteries: without residual variation, BART can return conditional means
 #'     clustered near the middle of the response scale, and rounding can collapse
 #'     a synthesized item to a single category. With independent residual
@@ -148,10 +149,58 @@
 #'     observed range.
 #' }
 #'
+#' When \code{measurement_blocks} is supplied, item generation is followed by
+#' a second, construct-level calibration stage. Plain named lists define both
+#' leaf measurement blocks and final structural families. A
+#' \code{cscore::composite_list()}-style input retains lower-order item blocks
+#' as leaves and joins leaves referenced by a higher-order composite into one
+#' structural family. Lower-order composites containing no synthesized
+#' variables, such as a covariate-only socioeconomic-status composite, are
+#' recorded as ignored rather than treated as synthesis targets. Synthesized
+#' variables not assigned to a block become singleton families. A lower-order
+#' block cannot belong to more than one final structural family.
+#'
+#' Let \eqn{S = (S_1,\ldots,S_B)} denote standardized structural-family scores
+#' computed from the observed input data, and let \eqn{R_{\mathrm{obs}}} be their
+#' correlation matrix. The measurement-aware BART target is
+#' \deqn{
+#'   R_{\mathrm{target}} = I +
+#'   \lambda (R_{\mathrm{obs}} - I),
+#' }
+#' where \eqn{\lambda} is \code{between_block_shrink}. Thus every off-diagonal
+#' family correlation receives the same requested multiplier before positive-
+#' definite stabilization. The reference is the exact \code{data} supplied to
+#' the engine, including a subgroup data frame when the caller is augmenting a
+#' minority group; it is not an external full-sample reference.
+#'
+#' The generated BART item columns are calibrated to this target by a
+#' deterministic Iman-Conover-style rank procedure. Twenty-five candidate rank
+#' assignments are generated with deterministic seed offsets. For each
+#' candidate and each structural family, one row permutation is applied to
+#' every item in that family. Candidate correlations are then recomputed from
+#' the permuted item data, and the candidate with the smallest maximum
+#' off-diagonal target error is retained, with mean absolute error used as the
+#' tie breaker. The uncalibrated BART output is candidate zero, so calibration
+#' cannot select a result with worse target error than the raw generated data.
+#'
+#' Because every item in a structural family moves together, this calibration
+#' preserves the family's complete multivariate row distribution. Item margins,
+#' response support, within-leaf correlations, relations among lower-order
+#' leaves in the same higher-order family, and reliability statistics such as
+#' alpha, composite reliability, and AVE are unchanged by the calibration
+#' stage itself. The target remains approximate in finite samples, particularly
+#' for small samples or heavily tied ordinal scores.
+#'
 #' The final synthetic dataset is assembled column-wise across target
 #' variables. If \code{covariates} are supplied, the covariate columns from the
-#' feeder data are appended unchanged. The returned \code{models} element
-#' contains the fitted \pkg{dbarts} model for each synthesized target.
+#' feeder data are appended unchanged. Covariate associations are not part of
+#' the structural calibration objective; observed, raw-generated, and
+#' calibrated family-to-covariate correlations are stored as diagnostics. The
+#' returned \code{models} element retains the fitted \pkg{dbarts} model and
+#' predictor-role metadata for each synthesized target. In measurement-aware
+#' mode, \code{models$all} stores the hierarchy, structural correlation target,
+#' raw and calibrated errors, calibration selection, within-family invariance
+#' diagnostics, and covariate diagnostics.
 #'
 #' This engine is useful for nonlinear conditional robustness checks, but it is
 #' not a general privacy mechanism and should not be used to treat synthetic
@@ -184,15 +233,18 @@
 #'   `num_trees`, `num_burn`, `num_draws`, `k_bart`, `power`, `base`,
 #'   `binary_threshold`, `posterior_predictive`, and `residual_scale`.
 #' @param measurement_blocks Optional named list defining item blocks whose
-#'   within-block predictors should be preserved while between-block predictors
-#'   are limited. Also accepts a `cscore::composite_list()`-style list with
-#'   `lower` and `higher` elements.
+#'   within-family predictors and joint item distributions should be preserved
+#'   while between-family dependence is limited and calibrated. Also accepts a
+#'   `cscore::composite_list()`-style list with `lower` and `higher` elements.
 #' @param between_block_shrink Optional numeric value in `[0, 1]`. When
-#'   `measurement_blocks` is supplied, the between-block predictor count is
-#'   `floor(predictor_k * between_block_shrink)`. Defaults to `0.50`.
+#'   `measurement_blocks` is supplied, this controls both the between-family
+#'   predictor count, `floor(predictor_k * between_block_shrink)`, and the final
+#'   off-diagonal structural-family correlation target. Defaults to `0.50`.
 #' @param seed Numeric. Seed for reproducibility.
 #'
-#' @return A named list with elements `models` and `data`.
+#' @return A named list with elements `models` and `data`. In measurement-aware
+#'   mode, target-specific model entries are retained and `models$all` contains
+#'   shared structural-calibration metadata.
 #'
 #' @importFrom utils modifyList
 #' @export
@@ -258,10 +310,22 @@ engine_bart <- function(
   }
 
   predictor_k <- min(predictor_k, max(length(variables) - 1, 0))
-  normalized_blocks <- as_measurement_blocks(
-    measurement_blocks = measurement_blocks,
-    variables = variables
-  )
+  measurement_plan <- if (is.null(measurement_blocks)) {
+    NULL
+  } else {
+    make_measurement_score_plan(
+      measurement_blocks = measurement_blocks,
+      variables = variables
+    )
+  }
+  normalized_blocks <- if (is.null(measurement_plan)) {
+    NULL
+  } else {
+    stats::setNames(
+      lapply(measurement_plan$structural_families, function(x) x$variables),
+      measurement_plan$family_names
+    )
+  }
   if (!is.null(normalized_blocks) && is.null(between_block_shrink)) {
     between_block_shrink <- 0.5
   }
@@ -459,6 +523,52 @@ engine_bart <- function(
     variables
   )
 
+  calibration <- NULL
+  structural_correlation_observed <- NULL
+  structural_correlation_target <- NULL
+  structural_covariate_correlation_observed <- NULL
+  structural_covariate_correlation_generated_raw <- NULL
+  structural_covariate_correlation_generated <- NULL
+  if (!is.null(measurement_plan)) {
+    observed_family_scores <- make_measurement_structural_score_frame(
+      data = data,
+      measurement_plan = measurement_plan
+    )
+    structural_correlation_observed <- estimate_brm_score_correlation(
+      observed_family_scores
+    )
+    structural_correlation_target <- apply_between_block_shrinkage(
+      cor_mat = structural_correlation_observed,
+      between_block_shrink = between_block_shrink
+    )
+    synthetic_data <- calibrate_bart_structural_bundles(
+      data = synthetic_data,
+      measurement_plan = measurement_plan,
+      target_cor = structural_correlation_target,
+      seed = seed + length(variables) + 4000L,
+      calibration_draws = 25L
+    )
+    calibration <- attr(synthetic_data, "calibration")
+    attr(synthetic_data, "calibration") <- NULL
+
+    diagnostic_covariates <- if (is.null(covariates)) character() else covariates
+    structural_covariate_correlation_observed <- estimate_bart_score_covariate_correlations(
+      score_data = observed_family_scores,
+      data = data,
+      covariates = diagnostic_covariates
+    )
+    structural_covariate_correlation_generated_raw <- estimate_bart_score_covariate_correlations(
+      score_data = calibration$scores_raw,
+      data = feeder_data,
+      covariates = diagnostic_covariates
+    )
+    structural_covariate_correlation_generated <- estimate_bart_score_covariate_correlations(
+      score_data = calibration$scores,
+      data = feeder_data,
+      covariates = diagnostic_covariates
+    )
+  }
+
   if (!is.null(covariates)) {
     synthetic_data <- cbind(
       synthetic_data,
@@ -466,21 +576,51 @@ engine_bart <- function(
     )
   }
 
+  model_output <- if (is.null(normalized_blocks)) {
+    purrr::map(bart_models, "model")
+  } else {
+    target_models <- purrr::map(bart_models, function(x) {
+      list(
+        model = x$model,
+        predictors = x$predictors,
+        predictor_roles = x$predictor_roles,
+        measurement_mode = "block_bundle_calibrated_bart",
+        measurement_blocks = normalized_blocks,
+        between_block_shrink = between_block_shrink
+      )
+    })
+    target_models$all <- list(
+      measurement_mode = "block_bundle_calibrated_bart",
+      measurement_blocks = normalized_blocks,
+      leaf_blocks = measurement_plan$leaf_blocks,
+      structural_families = measurement_plan$structural_families,
+      ignored_composites = measurement_plan$ignored_composites,
+      between_block_shrink = between_block_shrink,
+      structural_correlation_reference = "input_data",
+      structural_correlation_observed = structural_correlation_observed,
+      structural_correlation_target = structural_correlation_target,
+      structural_correlation_generated_raw = calibration$correlation_raw,
+      structural_correlation_generated = calibration$correlation,
+      structural_correlation_error_raw = calibration$error_raw,
+      structural_correlation_error_calibrated = calibration$error,
+      structural_correlation_max_error_raw = calibration$max_error_raw,
+      structural_correlation_max_error_calibrated = calibration$max_error,
+      score_calibration_mode = "iman_conover_family_bundle",
+      score_calibration_draws = calibration$draws,
+      score_calibration_selected_draw = calibration$selected_draw,
+      score_calibration_fallback_reason = calibration$fallback_reason,
+      within_family_correlation_change = calibration$within_family_correlation_change,
+      within_family_correlation_max_change = calibration$within_family_correlation_max_change,
+      covariate_calibration_scope = "diagnostic_only",
+      structural_covariate_correlation_observed = structural_covariate_correlation_observed,
+      structural_covariate_correlation_generated_raw = structural_covariate_correlation_generated_raw,
+      structural_covariate_correlation_generated = structural_covariate_correlation_generated
+    )
+    target_models
+  }
+
   list(
-    models = if (is.null(normalized_blocks)) {
-      purrr::map(bart_models, "model")
-    } else {
-      purrr::map(bart_models, function(x) {
-        list(
-          model = x$model,
-          predictors = x$predictors,
-          predictor_roles = x$predictor_roles,
-          measurement_mode = "block_predictor_bart",
-          measurement_blocks = normalized_blocks,
-          between_block_shrink = between_block_shrink
-        )
-      })
-    },
+    models = model_output,
     data = synthetic_data
   )
 }

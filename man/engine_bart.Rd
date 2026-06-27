@@ -70,18 +70,21 @@ as augmentation grows.}
 `binary_threshold`, `posterior_predictive`, and `residual_scale`.}
 
 \item{measurement_blocks}{Optional named list defining item blocks whose
-within-block predictors should be preserved while between-block predictors
-are limited. Also accepts a `cscore::composite_list()`-style list with
-`lower` and `higher` elements.}
+within-family predictors and joint item distributions should be preserved
+while between-family dependence is limited and calibrated. Also accepts a
+`cscore::composite_list()`-style list with `lower` and `higher` elements.}
 
 \item{between_block_shrink}{Optional numeric value in `[0, 1]`. When
-`measurement_blocks` is supplied, the between-block predictor count is
-`floor(predictor_k * between_block_shrink)`. Defaults to `0.50`.}
+`measurement_blocks` is supplied, this controls both the between-family
+predictor count, `floor(predictor_k * between_block_shrink)`, and the final
+off-diagonal structural-family correlation target. Defaults to `0.50`.}
 
 \item{seed}{Numeric. Seed for reproducibility.}
 }
 \value{
-A named list with elements `models` and `data`.
+A named list with elements `models` and `data`. In measurement-aware
+  mode, target-specific model entries are retained and `models$all` contains
+  shared structural-calibration metadata.
 }
 \description{
 Fits a collection of regularized BART models on a bootstrap-resampled,
@@ -204,9 +207,10 @@ The engine proceeds in seven steps:
     residual-donor row is used across targets for a synthetic observation, so
     residual variation preserves cross-item covariance instead of adding
     independent item-wise noise. When measurement blocks are supplied, the
-    donor row is shared within each block but sampled independently across
-    blocks, preserving measurement families while allowing between-block
-    relations to remain conservative. This step is important for ordinal item
+    donor row is shared within each final structural family but sampled
+    independently across families, preserving measurement families while
+    allowing between-family relations to remain conservative. This step is
+    important for ordinal item
     batteries: without residual variation, BART can return conditional means
     clustered near the middle of the response scale, and rounding can collapse
     a synthesized item to a single category. With independent residual
@@ -231,10 +235,58 @@ The engine proceeds in seven steps:
     observed range.
 }
 
+When \code{measurement_blocks} is supplied, item generation is followed by
+a second, construct-level calibration stage. Plain named lists define both
+leaf measurement blocks and final structural families. A
+\code{cscore::composite_list()}-style input retains lower-order item blocks
+as leaves and joins leaves referenced by a higher-order composite into one
+structural family. Lower-order composites containing no synthesized
+variables, such as a covariate-only socioeconomic-status composite, are
+recorded as ignored rather than treated as synthesis targets. Synthesized
+variables not assigned to a block become singleton families. A lower-order
+block cannot belong to more than one final structural family.
+
+Let \eqn{S = (S_1,\ldots,S_B)} denote standardized structural-family scores
+computed from the observed input data, and let \eqn{R_{\mathrm{obs}}} be their
+correlation matrix. The measurement-aware BART target is
+\deqn{
+  R_{\mathrm{target}} = I +
+  \lambda (R_{\mathrm{obs}} - I),
+}
+where \eqn{\lambda} is \code{between_block_shrink}. Thus every off-diagonal
+family correlation receives the same requested multiplier before positive-
+definite stabilization. The reference is the exact \code{data} supplied to
+the engine, including a subgroup data frame when the caller is augmenting a
+minority group; it is not an external full-sample reference.
+
+The generated BART item columns are calibrated to this target by a
+deterministic Iman-Conover-style rank procedure. Twenty-five candidate rank
+assignments are generated with deterministic seed offsets. For each
+candidate and each structural family, one row permutation is applied to
+every item in that family. Candidate correlations are then recomputed from
+the permuted item data, and the candidate with the smallest maximum
+off-diagonal target error is retained, with mean absolute error used as the
+tie breaker. The uncalibrated BART output is candidate zero, so calibration
+cannot select a result with worse target error than the raw generated data.
+
+Because every item in a structural family moves together, this calibration
+preserves the family's complete multivariate row distribution. Item margins,
+response support, within-leaf correlations, relations among lower-order
+leaves in the same higher-order family, and reliability statistics such as
+alpha, composite reliability, and AVE are unchanged by the calibration
+stage itself. The target remains approximate in finite samples, particularly
+for small samples or heavily tied ordinal scores.
+
 The final synthetic dataset is assembled column-wise across target
 variables. If \code{covariates} are supplied, the covariate columns from the
-feeder data are appended unchanged. The returned \code{models} element
-contains the fitted \pkg{dbarts} model for each synthesized target.
+feeder data are appended unchanged. Covariate associations are not part of
+the structural calibration objective; observed, raw-generated, and
+calibrated family-to-covariate correlations are stored as diagnostics. The
+returned \code{models} element retains the fitted \pkg{dbarts} model and
+predictor-role metadata for each synthesized target. In measurement-aware
+mode, \code{models$all} stores the hierarchy, structural correlation target,
+raw and calibrated errors, calibration selection, within-family invariance
+diagnostics, and covariate diagnostics.
 
 This engine is useful for nonlinear conditional robustness checks, but it is
 not a general privacy mechanism and should not be used to treat synthetic

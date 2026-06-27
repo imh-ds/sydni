@@ -70,6 +70,152 @@ test_that("graphical engine fails clearly when huge is unavailable", {
   )
 })
 
+test_that("bart measurement plans preserve hierarchy and reject overlap", {
+  composite_list <- list(
+    lower = list(
+      ses = c("mom", "dad"),
+      material = c("m1", "m2"),
+      luck = c("l1", "l2"),
+      fate = c("f1", "f2")
+    ),
+    higher = list(
+      chance = c("luck", "fate")
+    ),
+    order = c("ses", "material", "luck", "fate", "chance")
+  )
+  plan <- make_measurement_score_plan(
+    measurement_blocks = composite_list,
+    variables = c("m1", "m2", "l1", "l2", "f1", "f2")
+  )
+
+  expect_equal(names(plan$leaf_blocks), c("material", "luck", "fate"))
+  expect_equal(plan$family_names, c("material", "chance"))
+  expect_equal(plan$structural_families$chance$leaf_blocks, c("luck", "fate"))
+  expect_equal(plan$ignored_composites, "ses")
+
+  overlapping <- composite_list
+  overlapping$higher$fortune <- c("luck", "material")
+  expect_error(
+    make_measurement_score_plan(
+      measurement_blocks = overlapping,
+      variables = c("m1", "m2", "l1", "l2", "f1", "f2")
+    ),
+    "only one final structural family"
+  )
+})
+
+test_that("bart bundle calibration shrinks between families without changing reliability", {
+  set.seed(110)
+  n <- 300
+  z1 <- rnorm(n)
+  z2 <- 0.8 * z1 + rnorm(n, sd = 0.5)
+  z3 <- -0.6 * z1 + rnorm(n, sd = 0.7)
+  dat <- data.frame(
+    a1 = z1 + rnorm(n, sd = 0.35),
+    a2 = z1 + rnorm(n, sd = 0.35),
+    b1 = z2 + rnorm(n, sd = 0.35),
+    b2 = z2 + rnorm(n, sd = 0.35),
+    b3 = z2 + rnorm(n, sd = 0.35),
+    c1 = z3 + rnorm(n, sd = 0.35),
+    c2 = z3 + rnorm(n, sd = 0.35)
+  )
+  plan <- make_measurement_score_plan(
+    measurement_blocks = list(
+      alpha = c("a1", "a2"),
+      beta = c("b1", "b2", "b3"),
+      gamma = c("c1", "c2")
+    ),
+    variables = names(dat)
+  )
+  target <- diag(3)
+  dimnames(target) <- list(plan$family_names, plan$family_names)
+
+  calibrated <- calibrate_bart_structural_bundles(
+    data = dat,
+    measurement_plan = plan,
+    target_cor = target,
+    seed = 22,
+    calibration_draws = 25
+  )
+  diagnostics <- attr(calibrated, "calibration")
+
+  cronbach_alpha <- function(x) {
+    x <- as.data.frame(x)
+    p <- ncol(x)
+    p / (p - 1) * (1 - sum(vapply(x, stats::var, numeric(1))) / stats::var(rowSums(x)))
+  }
+  row_keys <- function(x) {
+    apply(x, 1, function(row) paste(format(row, digits = 17), collapse = "|"))
+  }
+
+  for (family_name in plan$family_names) {
+    family_vars <- plan$structural_families[[family_name]]$variables
+    expect_equal(
+      sort(row_keys(dat[, family_vars, drop = FALSE])),
+      sort(row_keys(calibrated[, family_vars, drop = FALSE]))
+    )
+    expect_equal(
+      stats::cor(dat[, family_vars, drop = FALSE]),
+      stats::cor(calibrated[, family_vars, drop = FALSE]),
+      tolerance = 1e-12
+    )
+    expect_equal(
+      cronbach_alpha(dat[, family_vars, drop = FALSE]),
+      cronbach_alpha(calibrated[, family_vars, drop = FALSE]),
+      tolerance = 1e-12
+    )
+  }
+
+  expect_lte(diagnostics$error, diagnostics$error_raw)
+  expect_lte(diagnostics$max_error, diagnostics$max_error_raw)
+  expect_lt(diagnostics$max_error, 0.15)
+  expect_lt(diagnostics$within_family_correlation_max_change, 1e-12)
+  expect_equal(
+    calibrated,
+    calibrate_bart_structural_bundles(
+      data = dat,
+      measurement_plan = plan,
+      target_cor = target,
+      seed = 22,
+      calibration_draws = 25
+    ),
+    ignore_attr = TRUE
+  )
+})
+
+test_that("bart bundle calibration approaches an observed correlation target", {
+  set.seed(111)
+  n <- 250
+  z1 <- rnorm(n)
+  z2 <- 0.7 * z1 + rnorm(n, sd = 0.7)
+  observed <- data.frame(
+    a1 = z1 + rnorm(n, sd = 0.3),
+    a2 = z1 + rnorm(n, sd = 0.3),
+    b1 = z2 + rnorm(n, sd = 0.3),
+    b2 = z2 + rnorm(n, sd = 0.3)
+  )
+  generated <- observed
+  generated[, c("b1", "b2")] <- generated[sample.int(n), c("b1", "b2")]
+  plan <- make_measurement_score_plan(
+    measurement_blocks = list(alpha = c("a1", "a2"), beta = c("b1", "b2")),
+    variables = names(observed)
+  )
+  target <- estimate_brm_score_correlation(
+    make_measurement_structural_score_frame(observed, plan)
+  )
+  calibrated <- calibrate_bart_structural_bundles(
+    data = generated,
+    measurement_plan = plan,
+    target_cor = target,
+    seed = 23,
+    calibration_draws = 25
+  )
+  diagnostics <- attr(calibrated, "calibration")
+
+  expect_lt(diagnostics$error, diagnostics$error_raw)
+  expect_lt(diagnostics$max_error, 0.15)
+})
+
 test_that("bart engine returns models and data when dbarts is installed", {
   skip_if_not_installed("dbarts")
 
@@ -158,12 +304,25 @@ test_that("measurement-aware bart engine records predictor roles", {
   expect_equal(nrow(res$data), 20)
   expect_true(all(c("a1", "a2", "a3", "b1", "b2", "b3", "g") %in% names(res$data)))
   expect_true(all(res$data$a1 %in% sort(unique(dat$a1))))
-  expect_equal(res$models$a1$measurement_mode, "block_predictor_bart")
+  expect_equal(res$models$a1$measurement_mode, "block_bundle_calibrated_bart")
   expect_equal(res$models$a1$between_block_shrink, 0.2)
   expect_equal(names(res$models$a1$measurement_blocks), c("alpha", "beta"))
   expect_equal(sort(res$models$a1$predictor_roles$within_block_predictors), c("a2", "a3"))
   expect_equal(length(res$models$a1$predictor_roles$between_block_predictors), 0)
   expect_equal(res$models$a1$predictor_roles$covariates, "g")
+  expect_equal(res$models$all$measurement_mode, "block_bundle_calibrated_bart")
+  expect_equal(res$models$all$score_calibration_mode, "iman_conover_family_bundle")
+  expect_equal(res$models$all$score_calibration_draws, 25)
+  expect_lte(
+    res$models$all$structural_correlation_error_calibrated,
+    res$models$all$structural_correlation_error_raw
+  )
+  expect_lte(
+    res$models$all$structural_correlation_max_error_calibrated,
+    res$models$all$structural_correlation_max_error_raw
+  )
+  expect_lt(res$models$all$within_family_correlation_max_change, 1e-12)
+  expect_equal(dim(res$models$all$structural_covariate_correlation_generated), c(2, 2))
 })
 
 test_that("measurement-aware bart between-block predictors follow shrinkage", {
@@ -214,10 +373,13 @@ test_that("measurement-aware bart accepts cscore-style higher-order blocks", {
     gs3 = rnorm(50),
     gs4 = rnorm(50),
     e1 = rnorm(50),
-    e2 = rnorm(50)
+    e2 = rnorm(50),
+    mom = rnorm(50),
+    dad = rnorm(50)
   )
   composite_list <- list(
     lower = list(
+      ses = c("mom", "dad"),
       consistency_interest = c("gs2", "gs3"),
       perseverance_effort = c("gs1", "gs4"),
       extraversion = c("e1", "e2")
@@ -225,12 +387,13 @@ test_that("measurement-aware bart accepts cscore-style higher-order blocks", {
     higher = list(
       grit = c("consistency_interest", "perseverance_effort")
     ),
-    order = c("consistency_interest", "perseverance_effort", "extraversion", "grit")
+    order = c("ses", "consistency_interest", "perseverance_effort", "extraversion", "grit")
   )
 
   res <- engine_bart(
     data = dat,
-    variables = names(dat),
+    variables = setdiff(names(dat), c("mom", "dad")),
+    covariates = c("mom", "dad"),
     measurement_blocks = composite_list,
     n_aug = 10,
     predictor_k = 2,
@@ -240,6 +403,9 @@ test_that("measurement-aware bart accepts cscore-style higher-order blocks", {
 
   expect_equal(names(res$models$gs1$measurement_blocks), c("extraversion", "grit"))
   expect_equal(sort(res$models$gs1$measurement_blocks$grit), sort(c("gs1", "gs2", "gs3", "gs4")))
+  expect_equal(res$models$all$ignored_composites, "ses")
+  expect_true(all(res$data$mom %in% dat$mom))
+  expect_true(all(res$data$dad %in% dat$dad))
 })
 
 test_that("measurement-aware bart keeps same-block predictors when predictor_k is zero", {

@@ -327,6 +327,30 @@ make_brm_measurement_plan <- function(measurement_blocks, variables) {
   )
 }
 
+make_measurement_score_plan <- function(measurement_blocks, variables) {
+  plan <- make_brm_measurement_plan(
+    measurement_blocks = measurement_blocks,
+    variables = variables
+  )
+
+  if (!is.null(plan) && identical(plan$input_type, "cscore")) {
+    sources <- vapply(
+      plan$structural_families,
+      function(x) x$source,
+      character(1)
+    )
+    family_order <- c(
+      names(sources)[sources == "lower"],
+      names(sources)[sources == "higher"],
+      names(sources)[sources == "singleton"]
+    )
+    plan$structural_families <- plan$structural_families[family_order]
+    plan$family_names <- family_order
+  }
+
+  plan
+}
+
 make_brm_cscore_measurement_plan <- function(composite_list, variables) {
   lower <- composite_list$lower
   higher <- composite_list$higher
@@ -376,6 +400,7 @@ make_brm_cscore_measurement_plan <- function(composite_list, variables) {
       if (!is.character(lower_refs)) {
         stop("Each `measurement_blocks$higher` element must be a character vector.")
       }
+      lower_refs <- unique(lower_refs)
 
       missing_lower <- setdiff(lower_refs, names(lower))
       if (length(missing_lower) > 0) {
@@ -451,7 +476,7 @@ validate_brm_leaf_blocks <- function(leaf_blocks, variables) {
   if (length(duplicated_items) > 0) {
     stop(
       paste0(
-        "`measurement_blocks` items cannot appear in more than one BRM leaf block: ",
+        "`measurement_blocks` items cannot appear in more than one measurement leaf block: ",
         paste(duplicated_items, collapse = ", "),
         "."
       )
@@ -481,7 +506,22 @@ make_brm_measurement_plan_object <- function(
     stop("No synthesized variables were found in `measurement_blocks`.")
   }
   if (length(structural_families) == 0) {
-    stop("No BRM structural families could be formed from `measurement_blocks`.")
+    stop("No structural families could be formed from `measurement_blocks`.")
+  }
+
+  family_leaves <- unlist(
+    lapply(structural_families, function(x) x$leaf_blocks),
+    use.names = FALSE
+  )
+  duplicated_family_leaves <- unique(family_leaves[duplicated(family_leaves)])
+  if (length(duplicated_family_leaves) > 0) {
+    stop(
+      paste0(
+        "Each lower-order measurement block can belong to only one final structural family: ",
+        paste(duplicated_family_leaves, collapse = ", "),
+        "."
+      )
+    )
   }
 
   leaf_to_family <- stats::setNames(rep(NA_character_, length(leaf_blocks)), names(leaf_blocks))
@@ -519,6 +559,24 @@ make_brm_structural_score_frame <- function(leaf_scores, measurement_plan) {
   out <- as.data.frame(family_scores)
   names(out) <- names(measurement_plan$structural_families)
   out
+}
+
+make_measurement_leaf_score_frame <- function(data, measurement_plan) {
+  make_brm_leaf_score_frame(
+    data = data,
+    leaf_blocks = measurement_plan$leaf_blocks
+  )
+}
+
+make_measurement_structural_score_frame <- function(data, measurement_plan) {
+  leaf_scores <- make_measurement_leaf_score_frame(
+    data = data,
+    measurement_plan = measurement_plan
+  )
+  make_brm_structural_score_frame(
+    leaf_scores = leaf_scores,
+    measurement_plan = measurement_plan
+  )
 }
 
 standardize_brm_score <- function(x) {
@@ -747,6 +805,239 @@ summarize_brm_structural_correlation_error <- function(cor_mat, target_cor) {
     mean = mean(offdiag),
     max = max(offdiag)
   )
+}
+
+make_bart_score_permutation <- function(source_scores, target_scores) {
+  if (length(source_scores) != length(target_scores)) {
+    stop("`source_scores` and `target_scores` must have the same length.")
+  }
+
+  n <- length(source_scores)
+  if (n == 0) {
+    return(integer())
+  }
+
+  source_scores <- as.numeric(source_scores)
+  target_scores <- as.numeric(target_scores)
+  source_scores[!is.finite(source_scores)] <- 0
+  target_scores[!is.finite(target_scores)] <- 0
+
+  source_order <- order(source_scores, seq_len(n), na.last = TRUE)
+  target_order <- order(target_scores, seq_len(n), na.last = TRUE)
+  permutation <- integer(n)
+  permutation[target_order] <- source_order
+  permutation
+}
+
+apply_bart_structural_bundle_permutation <- function(
+    data,
+    source_scores,
+    target_scores,
+    measurement_plan
+) {
+  out <- data
+  permutations <- list()
+
+  for (family_name in measurement_plan$family_names) {
+    family_vars <- measurement_plan$structural_families[[family_name]]$variables
+    permutation <- make_bart_score_permutation(
+      source_scores = source_scores[[family_name]],
+      target_scores = target_scores[[family_name]]
+    )
+    out[, family_vars] <- data[permutation, family_vars, drop = FALSE]
+    permutations[[family_name]] <- permutation
+  }
+
+  attr(out, "family_permutations") <- permutations
+  out
+}
+
+estimate_bart_within_family_correlation_change <- function(
+    before,
+    after,
+    measurement_plan
+) {
+  changes <- vapply(measurement_plan$family_names, function(family_name) {
+    family_vars <- measurement_plan$structural_families[[family_name]]$variables
+    if (length(family_vars) < 2) {
+      return(0)
+    }
+
+    before_frame <- as.data.frame(lapply(
+      before[, family_vars, drop = FALSE],
+      coerce_structural_input
+    ))
+    after_frame <- as.data.frame(lapply(
+      after[, family_vars, drop = FALSE],
+      coerce_structural_input
+    ))
+    before_cor <- suppressWarnings(stats::cor(before_frame, use = "pairwise.complete.obs"))
+    after_cor <- suppressWarnings(stats::cor(after_frame, use = "pairwise.complete.obs"))
+    differences <- abs(before_cor - after_cor)
+    differences <- differences[is.finite(differences)]
+    if (length(differences) == 0) 0 else max(differences)
+  }, numeric(1))
+
+  list(
+    by_family = changes,
+    max = if (length(changes) == 0) 0 else max(changes)
+  )
+}
+
+estimate_bart_score_covariate_correlations <- function(
+    score_data,
+    data,
+    covariates
+) {
+  score_data <- as.data.frame(score_data)
+  if (length(covariates) == 0) {
+    return(matrix(
+      numeric(0),
+      nrow = ncol(score_data),
+      ncol = 0,
+      dimnames = list(names(score_data), character())
+    ))
+  }
+
+  covariate_frame <- data[, covariates, drop = FALSE]
+  covariate_matrix <- tryCatch(
+    make_numeric_design_matrix(covariate_frame),
+    error = function(e) NULL
+  )
+  if (is.null(covariate_matrix) || nrow(covariate_matrix) != nrow(score_data)) {
+    return(matrix(
+      NA_real_,
+      nrow = ncol(score_data),
+      ncol = 0,
+      dimnames = list(names(score_data), character())
+    ))
+  }
+
+  colnames(covariate_matrix) <- make.unique(colnames(covariate_matrix))
+  combined <- cbind(as.matrix(score_data), covariate_matrix)
+  correlations <- suppressWarnings(stats::cor(combined, use = "pairwise.complete.obs"))
+  correlations[
+    names(score_data),
+    colnames(covariate_matrix),
+    drop = FALSE
+  ]
+}
+
+calibrate_bart_structural_bundles <- function(
+    data,
+    measurement_plan,
+    target_cor,
+    seed = NA,
+    calibration_draws = 25L
+) {
+  calibration_draws <- max(1L, as.integer(calibration_draws))
+  raw_scores <- make_measurement_structural_score_frame(
+    data = data,
+    measurement_plan = measurement_plan
+  )
+  target_cor <- target_cor[
+    measurement_plan$family_names,
+    measurement_plan$family_names,
+    drop = FALSE
+  ]
+  target_cor <- stabilize_correlation_matrix(target_cor)
+  raw_cor <- estimate_brm_score_correlation(raw_scores)
+  raw_error <- summarize_brm_structural_correlation_error(raw_cor, target_cor)
+
+  best <- list(
+    data = data,
+    scores = raw_scores,
+    correlation = raw_cor,
+    error = raw_error$mean,
+    max_error = raw_error$max,
+    selected_draw = 0L,
+    permutations = stats::setNames(
+      rep(list(seq_len(nrow(data))), length(measurement_plan$family_names)),
+      measurement_plan$family_names
+    )
+  )
+
+  fallback_reason <- NULL
+  if (ncol(raw_scores) < 2) {
+    fallback_reason <- "fewer_than_two_structural_families"
+  } else if (nrow(raw_scores) < 3) {
+    fallback_reason <- "fewer_than_three_synthetic_rows"
+  } else {
+    for (draw in seq_len(calibration_draws)) {
+      draw_seed <- if (length(seed) == 1 && is.finite(seed) && !is.na(seed)) {
+        seed + draw - 1L
+      } else {
+        NA_real_
+      }
+      candidate_score_target <- calibrate_brm_structural_score_correlations_once(
+        score_data = raw_scores,
+        target_cor = target_cor,
+        seed = draw_seed
+      )
+      candidate_data <- apply_bart_structural_bundle_permutation(
+        data = data,
+        source_scores = raw_scores,
+        target_scores = candidate_score_target,
+        measurement_plan = measurement_plan
+      )
+      permutations <- attr(candidate_data, "family_permutations")
+      attr(candidate_data, "family_permutations") <- NULL
+      candidate_scores <- make_measurement_structural_score_frame(
+        data = candidate_data,
+        measurement_plan = measurement_plan
+      )
+      candidate_cor <- estimate_brm_score_correlation(candidate_scores)
+      candidate_error <- summarize_brm_structural_correlation_error(
+        candidate_cor,
+        target_cor
+      )
+
+      if (
+        candidate_error$max < best$max_error ||
+          (
+            isTRUE(all.equal(candidate_error$max, best$max_error, tolerance = 1e-12)) &&
+              candidate_error$mean < best$error
+          )
+      ) {
+        best <- list(
+          data = candidate_data,
+          scores = candidate_scores,
+          correlation = candidate_cor,
+          error = candidate_error$mean,
+          max_error = candidate_error$max,
+          selected_draw = draw,
+          permutations = permutations
+        )
+      }
+    }
+
+    if (identical(best$selected_draw, 0L)) {
+      fallback_reason <- "raw_candidate_selected"
+    }
+  }
+
+  within_change <- estimate_bart_within_family_correlation_change(
+    before = data,
+    after = best$data,
+    measurement_plan = measurement_plan
+  )
+  attr(best$data, "calibration") <- list(
+    scores_raw = raw_scores,
+    scores = best$scores,
+    correlation_raw = raw_cor,
+    correlation = best$correlation,
+    error_raw = raw_error$mean,
+    error = best$error,
+    max_error_raw = raw_error$max,
+    max_error = best$max_error,
+    draws = calibration_draws,
+    selected_draw = best$selected_draw,
+    fallback_reason = fallback_reason,
+    permutations = best$permutations,
+    within_family_correlation_change = within_change$by_family,
+    within_family_correlation_max_change = within_change$max
+  )
+  best$data
 }
 
 simulate_brm_leaf_scores <- function(

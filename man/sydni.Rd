@@ -146,7 +146,9 @@ dataset with controlled noise injection.
 - `"copula"` fits subgroup-aware Gaussian copulas with empirical marginal
   reconstruction on noisy feeder data.
 - `"bart"` fits regularized Bayesian additive regression trees on noisy
-  feeder data.
+  feeder data. With `measurement_blocks`, it preserves complete item-family
+  bundles while calibrating between-family score correlations toward a
+  uniformly shrunk structural target.
 - `"factor"` fits subgroup-aware latent factor models for psychometric item
   batteries.
 - `"graphical"` fits subgroup-aware sparse Gaussian graphical models with

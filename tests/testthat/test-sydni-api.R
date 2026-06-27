@@ -190,8 +190,11 @@ test_that("sydni forwards measurement-aware bart arguments", {
   expect_equal(nrow(out$data), 12)
   expect_equal(out$meta$between_block_shrink, 0.25)
   expect_equal(out$models$a1$between_block_shrink, 0.25)
-  expect_equal(out$models$a1$measurement_mode, "block_predictor_bart")
+  expect_equal(out$models$a1$measurement_mode, "block_bundle_calibrated_bart")
   expect_equal(names(out$models$a1$measurement_blocks), c("alpha", "beta"))
+  expect_equal(out$models$all$measurement_mode, "block_bundle_calibrated_bart")
+  expect_equal(out$models$all$score_calibration_mode, "iman_conover_family_bundle")
+  expect_equal(out$models$all$structural_correlation_reference, "input_data")
 })
 
 test_that("sydni does not warn about measurement arguments for brm validation errors", {
