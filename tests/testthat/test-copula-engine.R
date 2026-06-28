@@ -33,6 +33,126 @@ test_that("copula engine keeps integer-like synthesized variables integer-like",
 
   expect_true(is.integer(out$data$x) || all(out$data$x == round(out$data$x)))
   expect_true(is.integer(out$data$y) || all(out$data$y == round(out$data$y)))
+  expect_null(out$models$all$measurement_mode)
+  expect_null(out$models$all$score_calibration_mode)
+})
+
+test_that("explicit shrinkage without blocks creates singleton families", {
+  set.seed(40)
+  n <- 180
+  x <- rnorm(n)
+  y <- 0.7 * x + rnorm(n, sd = 0.7)
+  z <- -0.4 * x + rnorm(n, sd = 0.9)
+  df <- data.frame(x = x, y = y, z = z)
+
+  out <- engine_copula(
+    data = df,
+    variables = names(df),
+    between_block_shrink = 0.35,
+    n_aug = 120,
+    seed = 41
+  )
+  meta <- out$models$all
+
+  expect_equal(meta$measurement_mode, "singleton_copula_calibrated")
+  expect_equal(meta$measurement_blocks_source, "implicit_singletons")
+  expect_equal(meta$shrinkage_scope, "all_synthesized_variables")
+  expect_equal(names(meta$measurement_blocks), names(df))
+  expect_true(all(vapply(meta$measurement_blocks, length, integer(1)) == 1L))
+  expect_equal(
+    meta$structural_correlation_target[row(meta$structural_correlation_target) != col(meta$structural_correlation_target)],
+    0.35 * meta$structural_correlation_observed[row(meta$structural_correlation_observed) != col(meta$structural_correlation_observed)],
+    tolerance = 1e-8
+  )
+  expect_lte(
+    meta$structural_correlation_error_calibrated,
+    meta$structural_correlation_error_raw
+  )
+  expect_lte(
+    meta$structural_correlation_max_error_calibrated,
+    meta$structural_correlation_max_error_raw
+  )
+  expect_equal(nrow(out$data), 120)
+  expect_true(all(out$data$x >= min(df$x) & out$data$x <= max(df$x)))
+})
+
+test_that("singleton copula supports zero and observed-correlation targets", {
+  set.seed(42)
+  n <- 140
+  x <- rnorm(n)
+  df <- data.frame(
+    x = x,
+    y = 0.6 * x + rnorm(n, sd = 0.8),
+    z = -0.5 * x + rnorm(n, sd = 0.8)
+  )
+
+  zero <- engine_copula(
+    data = df,
+    variables = names(df),
+    between_block_shrink = 0,
+    n_aug = 80,
+    seed = 43
+  )
+  one <- engine_copula(
+    data = df,
+    variables = names(df),
+    between_block_shrink = 1,
+    n_aug = 80,
+    seed = 43
+  )
+
+  zero_target <- zero$models$all$structural_correlation_target
+  expect_lt(max(abs(zero_target[row(zero_target) != col(zero_target)])), 1e-8)
+  expect_equal(
+    one$models$all$structural_correlation_target,
+    one$models$all$structural_correlation_observed,
+    tolerance = 1e-8
+  )
+})
+
+test_that("partial copula blocks add standalone variables as singleton families", {
+  set.seed(44)
+  n <- 160
+  latent <- rnorm(n)
+  df <- data.frame(
+    a1 = latent + rnorm(n, sd = 0.3),
+    a2 = latent + rnorm(n, sd = 0.3),
+    x = 0.5 * latent + rnorm(n, sd = 0.8),
+    y = rnorm(n)
+  )
+
+  out <- engine_copula(
+    data = df,
+    variables = names(df),
+    measurement_blocks = list(alpha = c("a1", "a2")),
+    between_block_shrink = 0.25,
+    n_aug = 100,
+    seed = 45
+  )
+  meta <- out$models$all
+
+  expect_equal(names(meta$measurement_blocks), c("alpha", "x", "y"))
+  expect_equal(meta$measurement_blocks$x, "x")
+  expect_equal(meta$measurement_blocks$y, "y")
+  expect_equal(meta$measurement_mode, "block_copula_calibrated")
+  expect_equal(meta$measurement_blocks_source, "user_supplied")
+  expect_equal(meta$shrinkage_scope, "between_structural_families")
+  expect_lt(meta$within_family_correlation_max_change, 1e-12)
+})
+
+test_that("implicit singleton shrinkage validates its explicit multiplier", {
+  df <- data.frame(x = rnorm(30), y = rnorm(30))
+
+  expect_error(
+    engine_copula(
+      data = df,
+      variables = names(df),
+      between_block_shrink = 1.2,
+      n_aug = 10,
+      seed = 46
+    ),
+    "must be a single numeric value in \\[0, 1\\]"
+  )
 })
 
 test_that("stabilized copula simulation handles nearly singular correlations", {
@@ -73,6 +193,8 @@ test_that("copula engine applies measurement-aware block shrinkage", {
   expect_equal(out$models$all$between_block_shrink, 0.25)
   expect_equal(names(out$models$all$measurement_blocks), c("alpha", "beta"))
   expect_equal(out$models$all$measurement_mode, "block_copula_calibrated")
+  expect_equal(out$models$all$measurement_blocks_source, "user_supplied")
+  expect_equal(out$models$all$shrinkage_scope, "between_structural_families")
   expect_equal(out$models$all$score_calibration_mode, "iman_conover_family_bundle")
   expect_equal(out$models$all$score_calibration_draws, 25)
   expect_lte(

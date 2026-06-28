@@ -100,6 +100,31 @@ test_that("sydni forwards measurement-aware copula arguments", {
   expect_equal(out$models$all$structural_correlation_reference, "input_data")
 })
 
+test_that("sydni activates singleton copula shrinkage without blocks", {
+  set.seed(47)
+  x <- rnorm(100)
+  df <- data.frame(
+    x = x,
+    y = 0.6 * x + rnorm(100, sd = 0.8),
+    z = rnorm(100)
+  )
+
+  out <- sydni(
+    data = df,
+    variables = names(df),
+    engine = "copula",
+    between_block_shrink = 0.4,
+    n_aug = 40,
+    seed = 48
+  )
+
+  expect_equal(out$meta$between_block_shrink, 0.4)
+  expect_equal(out$models$all$measurement_mode, "singleton_copula_calibrated")
+  expect_equal(out$models$all$measurement_blocks_source, "implicit_singletons")
+  expect_equal(out$models$all$shrinkage_scope, "all_synthesized_variables")
+  expect_equal(names(out$models$all$measurement_blocks), names(df))
+})
+
 test_that("sydni forwards measurement-aware factor arguments", {
   skip_if_not_installed("psych")
 

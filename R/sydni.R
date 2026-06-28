@@ -78,10 +78,14 @@
 #'   measurement-aware engines. Currently supported by the BRM, copula, BART,
 #'   factor, and graphical engines. Also accepts a
 #'   `cscore::composite_list()`-style list with `lower` and `higher` elements.
+#'   Variables omitted from a supplied block list are treated as singleton
+#'   families.
 #' @param between_block_shrink Optional numeric value in `[0, 1]`. When
 #'   `measurement_blocks` is supplied to a measurement-aware engine,
 #'   between-block correlations or between-block predictor counts are shrunk by
-#'   this value. Defaults to `0.50`.
+#'   this value. Defaults to `0.50`. For the copula engine, explicitly
+#'   supplying this value without `measurement_blocks` activates global
+#'   all-variable shrinkage through implicit singleton families.
 #' @param seed Numeric. Seed controlling internal sampling, noise injection,
 #'   predictor selection, and model fitting.
 #'

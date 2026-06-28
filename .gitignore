@@ -59,6 +59,7 @@ local_r_lib/
 
 # Development experiments, manuscripts, and benchmark outputs
 tests/3_Experiments/
+tests/internal/
 inst/benchmarks/
 paper/
 results/

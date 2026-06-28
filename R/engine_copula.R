@@ -159,6 +159,39 @@
 #' variables become singleton families, and each leaf can belong to only one
 #' final structural family.
 #'
+#' Copula measurement awareness has three activation modes:
+#' \enumerate{
+#'   \item If both \code{measurement_blocks} and
+#'     \code{between_block_shrink} are \code{NULL}, the legacy copula path is
+#'     retained without final structural calibration.
+#'   \item If \code{measurement_blocks = NULL} and
+#'     \code{between_block_shrink} is explicitly supplied, every synthesized
+#'     variable is treated as an implicit singleton family. All off-diagonal
+#'     relationships are therefore shrunk and calibrated.
+#'   \item If a partial \code{measurement_blocks} list is supplied, listed
+#'     multi-item families retain within-family protection and every unlisted
+#'     synthesized variable is automatically added as a singleton family.
+#' }
+#'
+#' Composite-only shrinkage therefore requires only:
+#' \preformatted{
+#' engine_copula(
+#'   data = dat,
+#'   variables = c("material", "dissatisfaction", "merit"),
+#'   between_block_shrink = 0.50
+#' )
+#' }
+#' A mixed item/composite analysis can instead use:
+#' \preformatted{
+#' engine_copula(
+#'   data = dat,
+#'   variables = c("a1", "a2", "a3", "outcome", "age_score"),
+#'   measurement_blocks = list(attitude = c("a1", "a2", "a3")),
+#'   between_block_shrink = 0.50
+#' )
+#' }
+#' Here \code{outcome} and \code{age_score} are inferred singleton families.
+#'
 #' The matrix adjustments above provide the first measurement-aware layer. If
 #' \eqn{M_\lambda} has diagonal and within-family entries equal to one and
 #' between-family entries equal to \eqn{\lambda}, subgroup and global copula
@@ -233,11 +266,16 @@
 #'   `cscore::composite_list()`-style list with `lower` and `higher` elements.
 #'   Within-family correlations are restored from the observed global reference
 #'   before simulation, and complete families are preserved during final score
-#'   calibration.
+#'   calibration. Synthesized variables omitted from a supplied block list are
+#'   automatically treated as singleton families.
 #' @param between_block_shrink Optional numeric value in `[0, 1]`. When
 #'   `measurement_blocks` is supplied, this multiplies both between-family
 #'   copula correlations and the final realized structural-correlation target.
-#'   Defaults to `0.50`.
+#'   Defaults to `0.50` when blocks are supplied. When
+#'   `measurement_blocks = NULL`, explicitly supplying this value activates
+#'   all-variable shrinkage by treating every synthesized variable as a
+#'   singleton family. If both arguments are `NULL`, legacy behavior is
+#'   retained.
 #' @param seed Numeric. Seed for reproducibility.
 #'
 #' @return A named list with elements `models` and `data`. In
@@ -292,11 +330,39 @@ engine_copula <- function(
     variables <- setdiff(colnames(data), covariates)
   }
 
-  measurement_plan <- if (is.null(measurement_blocks)) {
+  implicit_singletons <- is.null(measurement_blocks) && !is.null(between_block_shrink)
+  effective_measurement_blocks <- if (implicit_singletons) {
+    stats::setNames(as.list(variables), variables)
+  } else {
+    measurement_blocks
+  }
+  measurement_blocks_source <- if (implicit_singletons) {
+    "implicit_singletons"
+  } else if (!is.null(measurement_blocks)) {
+    "user_supplied"
+  } else {
+    NULL
+  }
+  shrinkage_scope <- if (implicit_singletons) {
+    "all_synthesized_variables"
+  } else if (!is.null(measurement_blocks)) {
+    "between_structural_families"
+  } else {
+    NULL
+  }
+  measurement_mode <- if (implicit_singletons) {
+    "singleton_copula_calibrated"
+  } else if (!is.null(measurement_blocks)) {
+    "block_copula_calibrated"
+  } else {
+    NULL
+  }
+
+  measurement_plan <- if (is.null(effective_measurement_blocks)) {
     NULL
   } else {
     make_measurement_score_plan(
-      measurement_blocks = measurement_blocks,
+      measurement_blocks = effective_measurement_blocks,
       variables = variables
     )
   }
@@ -495,7 +561,9 @@ engine_copula <- function(
             measurement_blocks = normalized_blocks,
             between_block_shrink = between_block_shrink,
             within_block_reference = "observed_global",
-            measurement_mode = if (!is.null(normalized_blocks)) "block_copula_calibrated" else NULL
+            measurement_mode = measurement_mode,
+            measurement_blocks_source = measurement_blocks_source,
+            shrinkage_scope = shrinkage_scope
           ),
           df = synth_df
         )
@@ -553,7 +621,9 @@ engine_copula <- function(
   )
 
   shared_metadata <- list(
-    measurement_mode = "block_copula_calibrated",
+    measurement_mode = measurement_mode,
+    measurement_blocks_source = measurement_blocks_source,
+    shrinkage_scope = shrinkage_scope,
     measurement_blocks = normalized_blocks,
     leaf_blocks = measurement_plan$leaf_blocks,
     structural_families = measurement_plan$structural_families,

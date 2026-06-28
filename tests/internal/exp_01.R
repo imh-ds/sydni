@@ -8,7 +8,7 @@ library(cscore)
 library(qol)
 
 # save.image("3_Experiments/Experiment_01/1_Data/Exp01_Working.rdata")
-load("3_Experiments/Experiment_01/1_Data/Exp01_Working.rdata")
+# load("3_Experiments/Experiment_01/1_Data/Exp01_Working.rdata")
 
 # DATA PREPARATION --------------------------------------------------------
 
@@ -150,8 +150,8 @@ results <- sydni(
     data = sdata,
     variables = vars,
     covariates = covars,
-    engine = "bart",
-    measurement_blocks = composite_list,
+    engine = "copula",
+    # measurement_blocks = composite_list,
     n_aug = nrow(cdata)-nrow(sdata),
     families = families,
     # predictor_k = 2,
