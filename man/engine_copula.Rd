@@ -54,19 +54,24 @@ correlations. If `feeder_include_observed = NULL`, observed rows are pooled
 only when covariates are supplied, matching the original copula engine.}
 
 \item{measurement_blocks}{Optional named list defining item blocks whose
-within-block correlations should be preserved while between-block
-correlations are shrunk. Also accepts a `cscore::composite_list()`-style
-list with `lower` and `higher` elements. Within-block correlations are
-restored from the observed global correlation reference before simulation.}
+within-family latent and generated measurement structure should be
+preserved while between-family dependence is shrunk. Also accepts a
+`cscore::composite_list()`-style list with `lower` and `higher` elements.
+Within-family correlations are restored from the observed global reference
+before simulation, and complete families are preserved during final score
+calibration.}
 
 \item{between_block_shrink}{Optional numeric value in `[0, 1]`. When
-`measurement_blocks` is supplied, between-block correlations are
-multiplied by this value. Defaults to `0.50`.}
+`measurement_blocks` is supplied, this multiplies both between-family
+copula correlations and the final realized structural-correlation target.
+Defaults to `0.50`.}
 
 \item{seed}{Numeric. Seed for reproducibility.}
 }
 \value{
-A named list with elements `models` and `data`.
+A named list with elements `models` and `data`. In
+  measurement-aware mode, \code{models$all} contains shared structural
+  calibration metadata.
 }
 \description{
 Fits a Gaussian copula to the dependence structure of the data, optionally
@@ -218,12 +223,57 @@ The engine proceeds in seven steps:
     \code{round_int = TRUE}.
 }
 
+Measurement-aware copula synthesis additionally uses a shared hierarchical
+block plan. Plain named lists define leaf measurement blocks and final
+structural families. In \code{cscore::composite_list()}-style inputs,
+lower-order batteries remain leaves and batteries referenced by a
+higher-order composite are combined into one final family. Composites
+containing no synthesized variables are recorded as ignored, unblocked
+variables become singleton families, and each leaf can belong to only one
+final structural family.
+
+The matrix adjustments above provide the first measurement-aware layer. If
+\eqn{M_\lambda} has diagonal and within-family entries equal to one and
+between-family entries equal to \eqn{\lambda}, subgroup and global copula
+matrices are attenuated as
+\deqn{
+  \widetilde{R} = R \circ M_\lambda,
+}
+followed by restoration of observed global within-family submatrices.
+
+A second layer controls realized family-score correlations after subgroup
+outputs are stacked. Let \eqn{R_{\mathrm{obs}}} be the correlation matrix of
+standardized structural-family scores in the input \code{data}. The final
+target is
+\deqn{
+  R_{\mathrm{target}} = I +
+  \lambda (R_{\mathrm{obs}} - I),
+}
+where \eqn{\lambda} is \code{between_block_shrink}. Twenty-five deterministic
+Iman-Conover-style candidate calibrations are generated. For each family,
+one row permutation is applied to all of its items, and candidate error is
+recomputed from the resulting item data. Selection minimizes maximum
+off-diagonal target error and then mean absolute error. The uncalibrated
+copula output is candidate zero, so calibration cannot worsen either error
+criterion.
+
+Complete-family permutation preserves each family's generated multivariate
+item distribution. The final calibration therefore leaves item margins and
+support, within-family correlations, lower-order relations within a
+higher-order family, alpha, composite reliability, and AVE unchanged.
+Covariates are carried through but are not calibration targets; observed,
+raw, and calibrated family-to-covariate associations are stored as
+diagnostics.
+
 The final synthetic dataset is formed by stacking subgroup outputs. If
 \code{covariates} are supplied, each synthetic subgroup block receives the
 corresponding covariate values for that subgroup. The returned
 \code{models} element stores, for each subgroup, the \pkg{copula}
 normal-copula object, the stabilized correlation matrix, and the margin type
-\code{"empirical"}.
+\code{"empirical"}. In measurement-aware mode, \code{models$all} also stores
+the hierarchy, structural targets, realized raw and calibrated correlations,
+target errors, within-family invariance diagnostics, and covariate
+diagnostics.
 
 This engine is appropriate when preserving broad joint dependence structure
 is more important than fitting a separate conditional model for each target.

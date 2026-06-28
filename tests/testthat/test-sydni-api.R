@@ -95,6 +95,9 @@ test_that("sydni forwards measurement-aware copula arguments", {
   expect_equal(out$meta$between_block_shrink, 0.25)
   expect_equal(out$models$all$between_block_shrink, 0.25)
   expect_equal(names(out$models$all$measurement_blocks), c("alpha", "beta"))
+  expect_equal(out$models$all$measurement_mode, "block_copula_calibrated")
+  expect_equal(out$models$all$score_calibration_mode, "iman_conover_family_bundle")
+  expect_equal(out$models$all$structural_correlation_reference, "input_data")
 })
 
 test_that("sydni forwards measurement-aware factor arguments", {

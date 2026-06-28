@@ -144,7 +144,9 @@ dataset with controlled noise injection.
   fits BRM models to structural block scores and reconstructs coherent
   item blocks from observed donors.
 - `"copula"` fits subgroup-aware Gaussian copulas with empirical marginal
-  reconstruction on noisy feeder data.
+  reconstruction on noisy feeder data. With `measurement_blocks`, it
+  restores within-family latent correlations and calibrates realized
+  between-family score correlations toward a uniformly shrunk target.
 - `"bart"` fits regularized Bayesian additive regression trees on noisy
   feeder data. With `measurement_blocks`, it preserves complete item-family
   bundles while calibrating between-family score correlations toward a
