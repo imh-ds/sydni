@@ -33,6 +33,7 @@ engine_brm(
   backend = c("rstan", "cmdstanr"),
   measurement_blocks = NULL,
   between_block_shrink = NULL,
+  effective_n_aug = n_aug,
   seed = NA
 )
 }
@@ -104,6 +105,10 @@ define structural score families when available.}
 `measurement_blocks` is supplied, the between-family predictor count is
 `floor(predictor_k * between_block_shrink)` and between-family priors are
 tightened by the same multiplier. Defaults to `0.50`.}
+
+\item{effective_n_aug}{Numeric. Effective number of generated rows retained
+for analysis; used for augmentation-linked regularization when an internal
+candidate pool is larger than the returned augmentation.}
 
 \item{seed}{Numeric. Seed for reproducibility.}
 }

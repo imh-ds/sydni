@@ -43,6 +43,87 @@ validate_engine_control <- function(engine_control) {
   engine_control
 }
 
+compute_auto_shrinkage <- function(n_obs, n_retained) {
+  if (!is.numeric(n_obs) || length(n_obs) != 1 || is.na(n_obs) || n_obs < 1) {
+    stop("`n_obs` must be a single positive number.")
+  }
+  if (
+    !is.numeric(n_retained) || length(n_retained) != 1 ||
+      is.na(n_retained) || n_retained < 1
+  ) {
+    stop("`n_retained` must be a single positive number.")
+  }
+
+  1 / (1 + n_retained / n_obs)
+}
+
+resolve_between_block_shrink <- function(
+    between_block_shrink,
+    n_obs,
+    n_retained,
+    auto_when_null = FALSE
+) {
+  if (is.null(between_block_shrink)) {
+    if (!auto_when_null) {
+      return(list(value = NULL, source = "legacy_none"))
+    }
+    return(list(
+      value = compute_auto_shrinkage(n_obs, n_retained),
+      source = "auto_effective_augmentation"
+    ))
+  }
+
+  if (
+    is.character(between_block_shrink) &&
+      length(between_block_shrink) == 1 &&
+      !is.na(between_block_shrink) &&
+      identical(tolower(between_block_shrink), "auto")
+  ) {
+    return(list(
+      value = compute_auto_shrinkage(n_obs, n_retained),
+      source = "auto_effective_augmentation"
+    ))
+  }
+
+  if (
+    !is.numeric(between_block_shrink) ||
+      length(between_block_shrink) != 1 ||
+      is.na(between_block_shrink) ||
+      between_block_shrink < 0 ||
+      between_block_shrink > 1
+  ) {
+    stop("`between_block_shrink` must be `NULL`, \"auto\", or a single numeric value in [0, 1].")
+  }
+
+  list(value = between_block_shrink, source = "user_specified")
+}
+
+compute_retention_candidate_n <- function(n_retained, prevalence, confidence = 0.999) {
+  if (!is.numeric(prevalence) || length(prevalence) != 1 || is.na(prevalence) || prevalence <= 0 || prevalence > 1) {
+    stop("The observed retention-group prevalence must be in (0, 1].")
+  }
+
+  if (prevalence == 1) {
+    return(as.integer(n_retained))
+  }
+
+  as.integer(n_retained + stats::qnbinom(
+    confidence,
+    size = n_retained,
+    prob = prevalence
+  ))
+}
+
+values_match <- function(x, value) {
+  if (length(value) != 1) {
+    stop("The retained or balanced group value must have length 1.")
+  }
+  if (is.na(value)) {
+    return(is.na(x))
+  }
+  !is.na(x) & as.character(x) == as.character(value)
+}
+
 capture_warnings <- function(expr) {
   warnings <- character()
   value <- withCallingHandlers(

@@ -18,6 +18,7 @@ engine_copula(
   engine_control = NULL,
   measurement_blocks = NULL,
   between_block_shrink = NULL,
+  effective_n_aug = n_aug,
   seed = NA
 )
 }
@@ -70,6 +71,10 @@ Defaults to `0.50` when blocks are supplied. When
 all-variable shrinkage by treating every synthesized variable as a
 singleton family. If both arguments are `NULL`, legacy behavior is
 retained.}
+
+\item{effective_n_aug}{Numeric. Effective number of generated rows retained
+for analysis when an internal candidate pool is larger. The copula engine
+accepts this for a consistent engine interface.}
 
 \item{seed}{Numeric. Seed for reproducibility.}
 }

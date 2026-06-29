@@ -248,6 +248,9 @@
 #' @param noise_bounds Optional numeric vector of length 2 used to clamp feeder
 #'   rows before model fitting.
 #' @param n_aug Numeric. Number of synthetic rows to generate.
+#' @param effective_n_aug Numeric. Effective number of generated rows retained
+#'   for analysis; used for augmentation-linked regularization when an internal
+#'   candidate pool is larger than the returned augmentation.
 #' @param k Numeric. SYDNI shrinkage exponent.
 #' @param engine_control Optional named list. Supported elements include
 #'   `n_factors`, `correlation_method`, `extraction_method`, `loading_shrink`,
@@ -286,6 +289,7 @@ engine_factor <- function(
     engine_control = NULL,
     measurement_blocks = NULL,
     between_block_shrink = NULL,
+    effective_n_aug = n_aug,
     seed = NA
 ) {
   noise_method <- match.arg(noise_method)
@@ -379,7 +383,7 @@ engine_factor <- function(
   }
 
   group_n <- compute_group_output_sizes(group_plan$data, n_aug)
-  aug_ratio <- n_aug / nrow(data)
+  aug_ratio <- effective_n_aug / nrow(data)
   loading_multiplier <- 1 / ((1 + aug_ratio) ^ (k * control$loading_shrink))
   uniqueness_floor <- min(0.95, control$uniqueness_floor * (1 + log1p(aug_ratio)))
 

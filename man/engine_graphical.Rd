@@ -20,6 +20,7 @@ engine_graphical(
   engine_control = NULL,
   measurement_blocks = NULL,
   between_block_shrink = NULL,
+  effective_n_aug = n_aug,
   seed = NA
 )
 }
@@ -64,6 +65,10 @@ preserved while between-family dependence is shrunk. Also accepts a
 `measurement_blocks` is supplied, this multiplies both between-family
 latent correlations and the final realized structural-correlation target.
 Defaults to `0.50`.}
+
+\item{effective_n_aug}{Numeric. Effective number of generated rows retained
+for analysis; used for augmentation-linked regularization when an internal
+candidate pool is larger than the returned augmentation.}
 
 \item{seed}{Numeric. Seed for reproducibility.}
 }

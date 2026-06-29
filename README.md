@@ -215,6 +215,43 @@ The returned object has three components:
 - `meta`: lightweight metadata with generation settings and an input
   summary, not the full original dataset
 
+## Automatic shrinkage and group balancing
+
+When measurement blocks are supplied, omitted shrinkage is calculated from
+the effective augmentation:
+
+```r
+lambda <- 1 / (1 + n_aug / nrow(data))
+```
+
+Here, `n_aug` always means the number of synthetic rows returned for analysis.
+If SYDNI generates a larger candidate pool to retain a target group, that
+candidate count does not make shrinkage more aggressive. Use
+`between_block_shrink = "auto"` to request the same rule explicitly when no
+measurement blocks are supplied; synthesized variables are then treated as
+singleton structural families.
+
+For an observed sample containing 80 women and 20 men, this call returns the
+60 synthetic men required to match the largest observed group:
+
+```r
+balanced <- sydni(
+  data = dat,
+  variables = item_vars,
+  covariates = "gender",
+  engine = "copula",
+  balance_by = "gender",
+  balance_value = "man",
+  between_block_shrink = "auto",
+  seed = 123
+)
+```
+
+For a manually chosen final augmentation size, use `n_aug`, `retain_by`, and
+`retain_value`. Metadata records the candidate count, retained count,
+effective augmentation ratio, shrinkage source, and post-retention
+calibration diagnostics.
+
 ## Noise controls
 
 SYDNI perturbs the feeder data before fitting or sampling.

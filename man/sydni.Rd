@@ -21,6 +21,11 @@ sydni(
   replace = TRUE,
   n_aug = NULL,
   prop_aug = NULL,
+  retain_by = NULL,
+  retain_value = NULL,
+  balance_by = NULL,
+  balance_value = NULL,
+  balance_target = "largest_group",
   families = NULL,
   base_sd = 10,
   sd_scale = 2,
@@ -77,9 +82,23 @@ predictors in each BRM conditional model.}
 \item{replace}{Logical. Determines whether bootstrap sampling uses
 replacement.}
 
-\item{n_aug}{Integer. Number of synthetic rows to generate.}
+\item{n_aug}{Integer. Number of synthetic rows to return. When retention is
+requested, SYDNI may generate a larger internal candidate pool.}
 
 \item{prop_aug}{Numeric. Optional proportion used to derive `n_aug`.}
+
+\item{retain_by}{Optional name of a covariate used to retain one target
+group from a larger internally generated candidate pool.}
+
+\item{retain_value}{Scalar value of `retain_by` to retain.}
+
+\item{balance_by}{Optional name of a categorical covariate to balance.
+Currently used with `balance_target = "largest_group"`.}
+
+\item{balance_value}{Scalar level of `balance_by` to augment.}
+
+\item{balance_target}{Character. Currently only `"largest_group"`; SYDNI
+returns enough target-group rows to match the largest observed group.}
 
 \item{families}{Optional named list of \pkg{brms} families for BRM outcomes.}
 
@@ -115,11 +134,14 @@ factor, and graphical engines. Also accepts a
 Variables omitted from a supplied block list are treated as singleton
 families.}
 
-\item{between_block_shrink}{Optional numeric value in `[0, 1]`. When
+\item{between_block_shrink}{`NULL`, `"auto"`, or a numeric value in
+`[0, 1]`. Automatic shrinkage is
+`1 / (1 + n_aug / nrow(data))`, based on the synthetic rows returned, not
+the size of an internal candidate pool. When
 `measurement_blocks` is supplied to a measurement-aware engine,
 between-block correlations or between-block predictor counts are shrunk by
-this value. Defaults to `0.50`. For the copula engine, explicitly
-supplying this value without `measurement_blocks` activates global
+this value. If blocks are supplied and the value is omitted, automatic
+shrinkage is used. Supplying a shrinkage value without blocks activates
 all-variable shrinkage through implicit singleton families.}
 
 \item{seed}{Numeric. Seed controlling internal sampling, noise injection,

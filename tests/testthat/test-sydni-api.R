@@ -59,6 +59,130 @@ test_that("sydni defaults n_aug to the observed row count", {
   expect_equal(out$meta$n_aug, nrow(df))
 })
 
+test_that("automatic shrinkage uses the effective retained augmentation", {
+  expect_equal(compute_auto_shrinkage(100, 60), 0.625)
+  expect_equal(compute_auto_shrinkage(150, 75), 2 / 3)
+
+  resolved <- resolve_between_block_shrink(
+    between_block_shrink = "auto",
+    n_obs = 100,
+    n_retained = 60
+  )
+  expect_equal(resolved$value, 0.625)
+  expect_equal(resolved$source, "auto_effective_augmentation")
+})
+
+test_that("measurement blocks default to automatic shrinkage", {
+  df <- data.frame(a = rnorm(20), b = rnorm(20))
+  captured <- NULL
+  testthat::local_mocked_bindings(
+    engine_copula = function(...) {
+      captured <<- list(...)
+      list(
+        models = list(all = list()),
+        data = captured$data[seq_len(captured$n_aug), , drop = FALSE]
+      )
+    }
+  )
+
+  out <- sydni(
+    data = df,
+    variables = names(df),
+    engine = "copula",
+    measurement_blocks = list(alpha = c("a", "b")),
+    n_aug = 10,
+    seed = 1
+  )
+
+  expect_equal(captured$between_block_shrink, 2 / 3)
+  expect_equal(out$meta$between_block_shrink, 2 / 3)
+  expect_equal(out$meta$shrinkage_source, "auto_effective_augmentation")
+})
+
+test_that("target retention separates candidate and returned augmentation sizes", {
+  df <- data.frame(
+    x = seq_len(100),
+    y = rev(seq_len(100)),
+    gender = factor(c(rep("woman", 80), rep("man", 20)))
+  )
+  captured <- NULL
+  testthat::local_mocked_bindings(
+    engine_copula = function(...) {
+      captured <<- list(...)
+      idx <- rep(seq_len(nrow(captured$data)), length.out = captured$n_aug)
+      list(models = list(all = list()), data = captured$data[idx, , drop = FALSE])
+    }
+  )
+
+  out <- sydni(
+    data = df,
+    variables = c("x", "y"),
+    covariates = "gender",
+    engine = "copula",
+    n_aug = 60,
+    retain_by = "gender",
+    retain_value = "man",
+    seed = 12
+  )
+
+  expect_equal(nrow(out$data), 60)
+  expect_true(all(out$data$gender == "man"))
+  expect_gt(captured$n_aug, 60)
+  expect_equal(captured$effective_n_aug, 60)
+  expect_equal(out$meta$candidate_n, captured$n_aug)
+  expect_equal(out$meta$retained_n, 60)
+  expect_equal(out$meta$between_block_shrink, 0.625)
+  expect_equal(out$models$all$score_calibration_mode, "iman_conover_family_bundle_post_retention")
+})
+
+test_that("largest-group balancing calculates the required retained rows", {
+  df <- data.frame(
+    x = rnorm(100),
+    y = rnorm(100),
+    gender = factor(c(rep("woman", 80), rep("man", 20)))
+  )
+  testthat::local_mocked_bindings(
+    engine_copula = function(...) {
+      args <- list(...)
+      idx <- rep(seq_len(nrow(args$data)), length.out = args$n_aug)
+      list(models = list(all = list()), data = args$data[idx, , drop = FALSE])
+    }
+  )
+
+  out <- sydni(
+    data = df,
+    variables = c("x", "y"),
+    covariates = "gender",
+    engine = "copula",
+    balance_by = "gender",
+    balance_value = "man",
+    seed = 13
+  )
+
+  expect_equal(nrow(out$data), 60)
+  expect_true(all(out$data$gender == "man"))
+  expect_equal(out$meta$retention_mode, "balance_largest_group")
+  expect_equal(out$meta$n_aug, 60)
+  expect_equal(out$meta$effective_augmentation_ratio, 0.6)
+  expect_equal(out$meta$between_block_shrink, 0.625)
+})
+
+test_that("retention and balancing require declared covariates", {
+  df <- data.frame(x = 1:10, gender = rep(c("woman", "man"), 5))
+
+  expect_error(
+    sydni(
+      data = df,
+      variables = "x",
+      engine = "copula",
+      n_aug = 4,
+      retain_by = "gender",
+      retain_value = "man"
+    ),
+    "supplied in `covariates`"
+  )
+})
+
 test_that("sydni rejects unsupported synthesized column types", {
   df <- data.frame(a = 1:5, b = I(list(1, 2, 3, 4, 5)))
 

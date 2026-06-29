@@ -227,6 +227,9 @@
 #' @param replace Logical. Determines whether bootstrap resampling uses
 #'   replacement.
 #' @param n_aug Numeric. Number of synthetic rows to generate.
+#' @param effective_n_aug Numeric. Effective number of generated rows retained
+#'   for analysis; used for augmentation-linked regularization when an internal
+#'   candidate pool is larger than the returned augmentation.
 #' @param k Numeric. SYDNI shrinkage exponent. Used to scale BART regularization
 #'   as augmentation grows.
 #' @param engine_control Optional named list. Supported elements include
@@ -267,6 +270,7 @@ engine_bart <- function(
     engine_control = NULL,
     measurement_blocks = NULL,
     between_block_shrink = NULL,
+    effective_n_aug = n_aug,
     seed = NA
 ) {
   noise_method <- match.arg(noise_method)
@@ -378,7 +382,7 @@ engine_bart <- function(
     bounds = noise_bounds
   )
 
-  aug_ratio <- n_aug / nrow(data)
+  aug_ratio <- effective_n_aug / nrow(data)
   effective_k <- control$k_bart * ((1 + aug_ratio) ^ k)
   effective_power <- control$power + log1p(aug_ratio)
   effective_base <- min(0.99, control$base + 0.02 * log1p(aug_ratio))

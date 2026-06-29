@@ -57,8 +57,17 @@
 #'   predictors in each BRM conditional model.
 #' @param replace Logical. Determines whether bootstrap sampling uses
 #'   replacement.
-#' @param n_aug Integer. Number of synthetic rows to generate.
+#' @param n_aug Integer. Number of synthetic rows to return. When retention is
+#'   requested, SYDNI may generate a larger internal candidate pool.
 #' @param prop_aug Numeric. Optional proportion used to derive `n_aug`.
+#' @param retain_by Optional name of a covariate used to retain one target
+#'   group from a larger internally generated candidate pool.
+#' @param retain_value Scalar value of `retain_by` to retain.
+#' @param balance_by Optional name of a categorical covariate to balance.
+#'   Currently used with `balance_target = "largest_group"`.
+#' @param balance_value Scalar level of `balance_by` to augment.
+#' @param balance_target Character. Currently only `"largest_group"`; SYDNI
+#'   returns enough target-group rows to match the largest observed group.
 #' @param families Optional named list of \pkg{brms} families for BRM outcomes.
 #' @param base_sd Numeric. Base standard deviation for BRM slope priors.
 #' @param sd_scale Numeric. Scale multiplier for BRM intercept priors.
@@ -80,11 +89,14 @@
 #'   `cscore::composite_list()`-style list with `lower` and `higher` elements.
 #'   Variables omitted from a supplied block list are treated as singleton
 #'   families.
-#' @param between_block_shrink Optional numeric value in `[0, 1]`. When
+#' @param between_block_shrink `NULL`, `"auto"`, or a numeric value in
+#'   `[0, 1]`. Automatic shrinkage is
+#'   `1 / (1 + n_aug / nrow(data))`, based on the synthetic rows returned, not
+#'   the size of an internal candidate pool. When
 #'   `measurement_blocks` is supplied to a measurement-aware engine,
 #'   between-block correlations or between-block predictor counts are shrunk by
-#'   this value. Defaults to `0.50`. For the copula engine, explicitly
-#'   supplying this value without `measurement_blocks` activates global
+#'   this value. If blocks are supplied and the value is omitted, automatic
+#'   shrinkage is used. Supplying a shrinkage value without blocks activates
 #'   all-variable shrinkage through implicit singleton families.
 #' @param seed Numeric. Seed controlling internal sampling, noise injection,
 #'   predictor selection, and model fitting.
@@ -132,6 +144,11 @@ sydni <- function(
     replace = TRUE,
     n_aug = NULL,
     prop_aug = NULL,
+    retain_by = NULL,
+    retain_value = NULL,
+    balance_by = NULL,
+    balance_value = NULL,
+    balance_target = "largest_group",
     families = NULL,
     base_sd = 10,
     sd_scale = 2,
@@ -180,6 +197,51 @@ sydni <- function(
     covariates = covariates
   )
 
+  retention_mode <- "none"
+  if (!is.null(balance_by)) {
+    if (!is.null(retain_by) || !is.null(retain_value)) {
+      stop("Use either `retain_by`/`retain_value` or `balance_by`/`balance_value`, not both.")
+    }
+    if (!is.null(n_aug) || !is.null(prop_aug)) {
+      stop("Do not supply `n_aug` or `prop_aug` when `balance_by` is used; the required augmentation is calculated automatically.")
+    }
+    if (!identical(balance_target, "largest_group")) {
+      stop("`balance_target` currently supports only \"largest_group\".")
+    }
+    if (length(balance_by) != 1 || !is.character(balance_by) || !balance_by %in% covariates) {
+      stop("`balance_by` must name one column supplied in `covariates`.")
+    }
+    if (is.null(balance_value) || length(balance_value) != 1) {
+      stop("`balance_value` must be a single target-group value.")
+    }
+
+    group_counts <- table(data[[balance_by]], useNA = "ifany")
+    target_n_obs <- sum(values_match(data[[balance_by]], balance_value))
+    if (target_n_obs == 0) {
+      stop("`balance_value` was not observed in `balance_by`.")
+    }
+    n_aug <- as.integer(max(group_counts) - target_n_obs)
+    if (n_aug < 1) {
+      stop("The requested balance group is already tied for the largest observed group.")
+    }
+    retain_by <- balance_by
+    retain_value <- balance_value
+    retention_mode <- "balance_largest_group"
+  } else {
+    if (xor(is.null(retain_by), is.null(retain_value))) {
+      stop("Supply both `retain_by` and `retain_value`, or neither.")
+    }
+    if (!is.null(retain_by)) {
+      if (length(retain_by) != 1 || !is.character(retain_by) || !retain_by %in% covariates) {
+        stop("`retain_by` must name one column supplied in `covariates`.")
+      }
+      if (length(retain_value) != 1) {
+        stop("`retain_value` must be a single target-group value.")
+      }
+      retention_mode <- "target_group"
+    }
+  }
+
   if (!is.null(n_aug) && !is.null(prop_aug)) {
     stop("Specify only one of `n_aug` or `prop_aug`, not both.")
   }
@@ -210,7 +272,43 @@ sydni <- function(
     n_aug <- round(n_aug)
   }
 
-  if (n_aug > nrow(data) && isFALSE(replace)) {
+  shrinkage <- resolve_between_block_shrink(
+    between_block_shrink = between_block_shrink,
+    n_obs = nrow(data),
+    n_retained = n_aug,
+    auto_when_null = !is.null(measurement_blocks) || retention_mode != "none"
+  )
+  between_block_shrink_requested <- between_block_shrink
+  between_block_shrink <- shrinkage$value
+
+  effective_measurement_blocks <- measurement_blocks
+  measurement_blocks_source <- if (is.null(measurement_blocks)) "none" else "user_supplied"
+  if (is.null(effective_measurement_blocks) && !is.null(between_block_shrink)) {
+    effective_measurement_blocks <- stats::setNames(as.list(variables), variables)
+    measurement_blocks_source <- "implicit_singletons"
+  }
+  engine_measurement_blocks <- if (
+    identical(engine, "copula") && is.null(measurement_blocks)
+  ) {
+    NULL
+  } else {
+    effective_measurement_blocks
+  }
+
+  candidate_n <- n_aug
+  retention_prevalence <- NULL
+  if (retention_mode != "none") {
+    retention_prevalence <- mean(values_match(data[[retain_by]], retain_value))
+    if (!is.finite(retention_prevalence) || retention_prevalence <= 0) {
+      stop("The requested retained group was not observed in `retain_by`.")
+    }
+    candidate_n <- compute_retention_candidate_n(
+      n_retained = n_aug,
+      prevalence = retention_prevalence
+    )
+  }
+
+  if (candidate_n > nrow(data) && isFALSE(replace)) {
     warning(
       "`replace` cannot be FALSE when `n_aug` exceeds the number of observed rows. Setting `replace = TRUE`."
     )
@@ -245,7 +343,16 @@ sydni <- function(
     predictor_k = predictor_k,
     replace = replace,
     n_aug = n_aug,
+    candidate_n = candidate_n,
     prop_aug = prop_aug,
+    retention_mode = retention_mode,
+    retain_by = retain_by,
+    retain_value = retain_value,
+    balance_by = balance_by,
+    balance_value = balance_value,
+    balance_target = if (is.null(balance_by)) NULL else balance_target,
+    retention_prevalence_observed = retention_prevalence,
+    effective_augmentation_ratio = n_aug / nrow(data),
     families = families,
     base_sd = base_sd,
     sd_scale = sd_scale,
@@ -258,8 +365,16 @@ sydni <- function(
     algorithm = algorithm,
     backend = backend,
     engine_control = engine_control,
-    measurement_blocks = measurement_blocks,
+    measurement_blocks = effective_measurement_blocks,
+    measurement_blocks_source = measurement_blocks_source,
+    between_block_shrink_requested = between_block_shrink_requested,
     between_block_shrink = between_block_shrink,
+    shrinkage_source = shrinkage$source,
+    shrinkage_formula = if (identical(shrinkage$source, "auto_effective_augmentation")) {
+      "1 / (1 + n_retained / n_obs)"
+    } else {
+      NULL
+    },
     seed = seed,
     input_summary = list(
       n_obs = nrow(data),
@@ -285,7 +400,8 @@ sydni <- function(
       predictor_method = predictor_method,
       predictor_k = predictor_k,
       replace = replace,
-      n_aug = n_aug,
+      n_aug = candidate_n,
+      effective_n_aug = n_aug,
       families = families,
       base_sd = base_sd,
       sd_scale = sd_scale,
@@ -298,7 +414,7 @@ sydni <- function(
       algorithm = algorithm,
       seed = seed,
       backend = backend,
-      measurement_blocks = measurement_blocks,
+      measurement_blocks = engine_measurement_blocks,
       between_block_shrink = between_block_shrink
     ),
     copula = engine_copula(
@@ -311,9 +427,10 @@ sydni <- function(
       p = p,
       r = r,
       round_int = round_int,
-      n_aug = n_aug,
+      n_aug = candidate_n,
+      effective_n_aug = n_aug,
       engine_control = engine_control,
-      measurement_blocks = measurement_blocks,
+      measurement_blocks = engine_measurement_blocks,
       between_block_shrink = between_block_shrink,
       seed = seed
     ),
@@ -331,10 +448,11 @@ sydni <- function(
       predictor_method = predictor_method,
       predictor_k = predictor_k,
       replace = replace,
-      n_aug = n_aug,
+      n_aug = candidate_n,
+      effective_n_aug = n_aug,
       k = k,
       engine_control = engine_control,
-      measurement_blocks = measurement_blocks,
+      measurement_blocks = engine_measurement_blocks,
       between_block_shrink = between_block_shrink,
       seed = seed
     ),
@@ -349,10 +467,11 @@ sydni <- function(
       f = f,
       r = r,
       round_int = round_int,
-      n_aug = n_aug,
+      n_aug = candidate_n,
+      effective_n_aug = n_aug,
       k = k,
       engine_control = engine_control,
-      measurement_blocks = measurement_blocks,
+      measurement_blocks = engine_measurement_blocks,
       between_block_shrink = between_block_shrink,
       seed = seed
     ),
@@ -367,14 +486,83 @@ sydni <- function(
       f = f,
       r = r,
       round_int = round_int,
-      n_aug = n_aug,
+      n_aug = candidate_n,
+      effective_n_aug = n_aug,
       k = k,
       engine_control = engine_control,
-      measurement_blocks = measurement_blocks,
+      measurement_blocks = engine_measurement_blocks,
       between_block_shrink = between_block_shrink,
       seed = seed
     )
   )
+
+  if (retention_mode != "none") {
+    eligible <- which(values_match(synth$data[[retain_by]], retain_value))
+    if (length(eligible) < n_aug) {
+      stop(
+        paste0(
+          "Only ", length(eligible), " eligible synthetic rows were generated, but ",
+          n_aug, " were requested. Re-run with a different seed or a more common retained group."
+        )
+      )
+    }
+    retained_indices <- with_seed(seed + 9000L, sample(eligible, n_aug, replace = FALSE))
+    retained_data_raw <- synth$data[retained_indices, , drop = FALSE]
+
+    measurement_plan <- make_measurement_score_plan(
+      measurement_blocks = effective_measurement_blocks,
+      variables = variables
+    )
+    observed_scores <- make_measurement_structural_score_frame(
+      data = data,
+      measurement_plan = measurement_plan
+    )
+    observed_cor <- estimate_brm_score_correlation(observed_scores)
+    target_cor <- apply_between_block_shrinkage(
+      cor_mat = observed_cor,
+      between_block_shrink = between_block_shrink
+    )
+    retained_data <- calibrate_measurement_structural_bundles(
+      data = retained_data_raw,
+      measurement_plan = measurement_plan,
+      target_cor = target_cor,
+      seed = seed + 10000L,
+      calibration_draws = 25L
+    )
+    calibration <- attr(retained_data, "calibration")
+    attr(retained_data, "calibration") <- NULL
+    synth$data <- retained_data
+    meta$eligible_candidate_n <- length(eligible)
+    meta$retained_n <- n_aug
+    meta$post_retention_calibration <- TRUE
+
+    retention_metadata <- list(
+      retention_mode = retention_mode,
+      retain_by = retain_by,
+      retain_value = retain_value,
+      candidate_n = candidate_n,
+      eligible_candidate_n = length(eligible),
+      retained_n = n_aug,
+      effective_augmentation_ratio = n_aug / nrow(data),
+      between_block_shrink = between_block_shrink,
+      shrinkage_source = shrinkage$source,
+      post_retention_calibration = TRUE,
+      structural_correlation_observed = observed_cor,
+      structural_correlation_target = target_cor,
+      structural_correlation_generated_raw = calibration$correlation_raw,
+      structural_correlation_generated = calibration$correlation,
+      structural_correlation_error_raw = calibration$error_raw,
+      structural_correlation_error_calibrated = calibration$error,
+      structural_correlation_max_error_raw = calibration$max_error_raw,
+      structural_correlation_max_error_calibrated = calibration$max_error,
+      score_calibration_mode = "iman_conover_family_bundle_post_retention"
+    )
+    if ("all" %in% names(synth$models)) {
+      synth$models$all <- utils::modifyList(synth$models$all, retention_metadata)
+    } else {
+      synth$models$all <- retention_metadata
+    }
+  }
 
   list(
     models = synth$models,

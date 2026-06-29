@@ -253,6 +253,9 @@
 #' @param replace Logical. Determines whether bootstrap resampling uses
 #'   replacement.
 #' @param n_aug Numeric. Number of synthetic rows to generate.
+#' @param effective_n_aug Numeric. Effective number of generated rows retained
+#'   for analysis; used for augmentation-linked regularization when an internal
+#'   candidate pool is larger than the returned augmentation.
 #' @param families Optional named list of \pkg{brms} families to use manually.
 #' @param base_sd Numeric. Base standard deviation for slope priors.
 #' @param sd_scale Numeric. Scale multiplier used to estimate intercept priors.
@@ -307,6 +310,7 @@ engine_brm <- function(
     backend = c("rstan", "cmdstanr"),
     measurement_blocks = NULL,
     between_block_shrink = NULL,
+    effective_n_aug = n_aug,
     seed = NA
 ) {
   noise_method <- match.arg(noise_method)
@@ -363,6 +367,7 @@ engine_brm <- function(
       predictor_k = predictor_k,
       replace = replace,
       n_aug = n_aug,
+      effective_n_aug = effective_n_aug,
       base_sd = base_sd,
       sd_scale = sd_scale,
       k = k,
@@ -600,6 +605,7 @@ engine_brm_block_score <- function(
     predictor_k,
     replace,
     n_aug,
+    effective_n_aug,
     base_sd,
     sd_scale,
     k,
@@ -674,7 +680,7 @@ engine_brm_block_score <- function(
     width = 100
   )
 
-  shrink_sd <- base_sd / (1 + n_aug / nrow(data))^k
+  shrink_sd <- base_sd / (1 + effective_n_aug / nrow(data))^k
   score_models <- stats::setNames(
     lapply(seq_along(measurement_plan$family_names), function(i) {
       family_name <- measurement_plan$family_names[[i]]

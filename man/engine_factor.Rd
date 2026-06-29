@@ -20,6 +20,7 @@ engine_factor(
   engine_control = NULL,
   measurement_blocks = NULL,
   between_block_shrink = NULL,
+  effective_n_aug = n_aug,
   seed = NA
 )
 }
@@ -68,6 +69,10 @@ calibrates realized between-family score correlations.}
 `measurement_blocks` is supplied, this multiplies both latent block-score
 correlations and the final realized structural-correlation target.
 Defaults to `0.50`.}
+
+\item{effective_n_aug}{Numeric. Effective number of generated rows retained
+for analysis; used for augmentation-linked regularization when an internal
+candidate pool is larger than the returned augmentation.}
 
 \item{seed}{Numeric. Seed for reproducibility.}
 }

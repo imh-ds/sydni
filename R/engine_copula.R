@@ -253,6 +253,9 @@
 #' @param noise_bounds Optional numeric vector of length 2 used to clamp feeder
 #'   rows before model fitting.
 #' @param n_aug Numeric. Number of synthetic rows to generate.
+#' @param effective_n_aug Numeric. Effective number of generated rows retained
+#'   for analysis when an internal candidate pool is larger. The copula engine
+#'   accepts this for a consistent engine interface.
 #' @param engine_control Optional named list. Supported elements include
 #'   `feeder_min_multiplier`, a positive numeric multiplier for the minimum
 #'   noisy feeder target size per synthesized variable, and
@@ -297,6 +300,7 @@ engine_copula <- function(
     engine_control = NULL,
     measurement_blocks = NULL,
     between_block_shrink = NULL,
+    effective_n_aug = n_aug,
     seed = NA) {
   noise_method <- match.arg(noise_method)
   engine_control <- validate_engine_control(engine_control)

@@ -215,6 +215,9 @@
 #' @param noise_bounds Optional numeric vector of length 2 used to clamp feeder
 #'   rows before model fitting.
 #' @param n_aug Numeric. Number of synthetic rows to generate.
+#' @param effective_n_aug Numeric. Effective number of generated rows retained
+#'   for analysis; used for augmentation-linked regularization when an internal
+#'   candidate pool is larger than the returned augmentation.
 #' @param k Numeric. SYDNI shrinkage exponent.
 #' @param engine_control Optional named list. Supported elements include
 #'   `transform`, `selection`, `ebic_gamma`, `lambda_fixed`, and `pd_tol`.
@@ -249,6 +252,7 @@ engine_graphical <- function(
     engine_control = NULL,
     measurement_blocks = NULL,
     between_block_shrink = NULL,
+    effective_n_aug = n_aug,
     seed = NA
 ) {
   noise_method <- match.arg(noise_method)
@@ -327,7 +331,7 @@ engine_graphical <- function(
   )
 
   group_n <- compute_group_output_sizes(group_plan$data, n_aug)
-  aug_ratio <- n_aug / nrow(data)
+  aug_ratio <- effective_n_aug / nrow(data)
   gamma_eff <- min(1, control$ebic_gamma + 0.15 * log1p(aug_ratio) * k)
   global_struct_mat <- make_structural_matrix(data, variables)
   global_latent_mat <- if (identical(control$transform, "nonparanormal")) {

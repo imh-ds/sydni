@@ -152,6 +152,7 @@ results <- sydni(
     covariates = covars,
     engine = "copula",
     # measurement_blocks = composite_list,
+    between_block_shrink = .3,
     n_aug = nrow(cdata)-nrow(sdata),
     families = families,
     # predictor_k = 2,
