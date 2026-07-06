@@ -40,6 +40,13 @@ Install `sydni` from GitHub with:
 remotes::install_github("imh-ds/sydni")
 ```
 
+The BRM engine is optional. Install `brms` only if you want to use
+`engine = "brm"`:
+
+```r
+install.packages("brms")
+```
+
 If you want to use the Bayesian regression engine with the `cmdstanr`
 backend:
 

@@ -1,6 +1,43 @@
-test_that("brm engine requires brms", {
-  skip_if_not_installed("brms")
-  expect_true(requireNamespace("brms", quietly = TRUE))
+test_that("brm engine fails fast when brms is unavailable", {
+  testthat::local_mocked_bindings(
+    requireNamespace = function(package, quietly = FALSE) {
+      if (identical(package, "brms")) {
+        return(FALSE)
+      }
+      base::requireNamespace(package, quietly = quietly)
+    },
+    .package = "sydni"
+  )
+
+  df <- data.frame(x = 1:5, y = 6:10)
+
+  expect_error(
+    engine_brm(
+      data = df,
+      variables = c("x", "y"),
+      n_aug = 3
+    ),
+    "The 'brms' package must be installed"
+  )
+
+  expect_error(
+    sydni(
+      data = df,
+      variables = c("x", "y"),
+      engine = "brm",
+      n_aug = 3
+    ),
+    "The 'brms' package must be installed"
+  )
+})
+
+test_that("package metadata keeps brms optional", {
+  desc <- readLines(testthat::test_path("..", "..", "DESCRIPTION"))
+  namespace <- readLines(testthat::test_path("..", "..", "NAMESPACE"))
+
+  expect_false(any(grepl("^\\s*brms\\s*,?$", desc[seq(which(grepl("^Imports:$", desc)) + 1, which(grepl("^Suggests:$", desc)) - 1)])))
+  expect_true(any(grepl("^\\s*brms\\s*,?$", desc[seq(which(grepl("^Suggests:$", desc)) + 1, which(grepl("^Remotes:$", desc)) - 1)])))
+  expect_false(any(grepl("^importFrom\\(brms,", namespace)))
 })
 
 test_that("brm engine preserves continuous outcomes when using gaussian families", {

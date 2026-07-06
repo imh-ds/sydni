@@ -14,12 +14,12 @@ Imports:
     dplyr,
     purrr,
     truncnorm,
-    brms,
     copula,
     corpcor,
     infotheo,
     progress
 Suggests:
+    brms,
     dbarts,
     cmdstanr,
     huge,

@@ -16,7 +16,6 @@
 #'   such as \code{bernoulli("logit")}, \code{gaussian()}, or \code{poisson()}.
 #'
 #' @importFrom stats gaussian poisson
-#' @importFrom brms negbinomial
 #'
 #' @keywords internal
 guess_family <- function(y) {
@@ -46,7 +45,7 @@ guess_family <- function(y) {
       # Check for true count-like behavior
       if (all(y >= 0)) {
         if (var(y, na.rm = TRUE) > mean(y, na.rm = TRUE) * 1.5) {
-          return(negbinomial())
+          return(brms::negbinomial())
         } else {
           return(poisson())
         }
