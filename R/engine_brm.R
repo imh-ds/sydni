@@ -477,7 +477,8 @@ engine_brm <- function(
         v <- variables[[i]]
         intercept_prior <- estimate_intercept_prior(
           y = data[[v]],
-          sd_scale = sd_scale
+          sd_scale = sd_scale,
+          family = variable_families[[v]]
         )
 
         if (isTRUE(getOption("sydni.brm_verbose", FALSE))) {

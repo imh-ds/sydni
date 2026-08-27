@@ -31,6 +31,12 @@ test_that("brm engine fails fast when brms is unavailable", {
   )
 })
 
+test_that("empirical BRM intercept priors skip factor outcomes", {
+  expect_null(estimate_intercept_prior(factor(c("no", "yes", "no"))))
+  expect_null(estimate_intercept_prior(ordered(c("low", "high", "low"))))
+  expect_null(estimate_intercept_prior(c(0L, 1L, 1L), family = stats::poisson()))
+})
+
 test_that("package metadata keeps brms optional", {
   desc <- readLines(testthat::test_path("..", "..", "DESCRIPTION"))
   namespace <- readLines(testthat::test_path("..", "..", "NAMESPACE"))

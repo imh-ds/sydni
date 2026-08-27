@@ -4,24 +4,27 @@
 \alias{estimate_intercept_prior}
 \title{Estimate a Prior for the Intercept}
 \usage{
-estimate_intercept_prior(y, sd_scale = 2)
+estimate_intercept_prior(y, sd_scale = 2, family = NULL)
 }
 \arguments{
-\item{y}{Numeric vector. The outcome variable used to estimate the prior.}
+\item{y}{Outcome vector used to estimate a Gaussian-model prior.}
 
 \item{sd_scale}{Numeric. Multiplier for the standard deviation of `y` to set
 the prior's spread. A value of 2 approximates a 95% coverage around the
 sample mean. Default is 2.}
+
+\item{family}{Optional model family. When supplied and not Gaussian, no
+empirical normal intercept prior is created.}
 }
 \value{
 A `brms::prior()` object specifying a normal prior for class
-  `"Intercept"`.
+  `"Intercept"`, or `NULL` for non-Gaussian outcomes.
 }
 \description{
 This function generates a weakly informative normal prior for the intercept
-in a `brms` model, based on the observed distribution of the outcome
-variable. The prior is centered at the sample mean and scaled by a multiple
-of the sample standard deviation to allow flexibility while still applying
-regularization.
+in a Gaussian `brms` model, based on the observed distribution of the
+outcome variable. The prior is centered at the sample mean and scaled by a
+multiple of the sample standard deviation. Non-Gaussian outcomes return
+`NULL` so that `brms` uses its family-appropriate default intercept prior.
 }
 \keyword{internal}
