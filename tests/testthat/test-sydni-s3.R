@@ -55,6 +55,27 @@ test_that("sydni plots observed-versus-synthetic marginal and correlation diagno
   expect_true(file.exists(plot_path))
 })
 
+test_that("sydni returns editable ggplot diagnostics when requested", {
+  skip_if_not_installed("ggplot2")
+  out <- make_sydni_s3_fixture()
+
+  marginal <- plot(out, backend = "ggplot", variables = "response")
+  expect_s3_class(marginal, "ggplot")
+
+  correlation <- plot(
+    out,
+    type = "correlation",
+    backend = "ggplot",
+    variables = c("continuous", "response")
+  )
+  expect_s3_class(correlation, "ggplot")
+
+  expect_error(
+    plot(out, backend = "ggplot"),
+    "one display type"
+  )
+})
+
 test_that("sydni can draw a shared marginal-plot legend", {
   plot_path <- tempfile(fileext = ".png")
   grDevices::png(plot_path)

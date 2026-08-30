@@ -9,6 +9,7 @@
   type = c("marginal", "correlation"),
   variables = NULL,
   max_vars = 6L,
+  backend = c("base", "ggplot"),
   ...
 )
 }
@@ -24,10 +25,15 @@ matrices.}
 \item{max_vars}{Maximum number of variables displayed when `variables` is
 omitted.}
 
+\item{backend}{Plotting backend. Use `"base"` (the default) for dependency-free
+base-R diagnostics or `"ggplot"` for an editable `ggplot2` graphic. The
+ggplot marginal backend requires selected variables to share a display type.}
+
 \item{...}{Unused.}
 }
 \value{
-`x`, invisibly.
+For `backend = "base"`, `x`, invisibly. For `backend = "ggplot"`,
+  an editable `ggplot` object.
 }
 \description{
 Plot SYDNI diagnostics

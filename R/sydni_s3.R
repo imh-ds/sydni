@@ -102,11 +102,17 @@ print.summary.sydni <- function(x, ...) {
 #' @param variables Optional synthesized-variable names to include.
 #' @param max_vars Maximum number of variables displayed when `variables` is
 #'   omitted.
+#' @param backend Plotting backend. Use `"base"` (the default) for dependency-free
+#'   base-R diagnostics or `"ggplot"` for an editable `ggplot2` graphic. The
+#'   ggplot marginal backend requires selected variables to share a display type.
 #' @param ... Unused.
-#' @return `x`, invisibly.
+#' @return For `backend = "base"`, `x`, invisibly. For `backend = "ggplot"`,
+#'   an editable `ggplot` object.
 #' @export
-plot.sydni <- function(x, type = c("marginal", "correlation"), variables = NULL, max_vars = 6L, ...) {
+plot.sydni <- function(x, type = c("marginal", "correlation"), variables = NULL,
+                       max_vars = 6L, backend = c("base", "ggplot"), ...) {
   type <- match.arg(type)
+  backend <- match.arg(backend)
   observed_data <- x$observed_data
   synthetic_data <- x$data
   if (!is.data.frame(observed_data)) {
@@ -130,12 +136,128 @@ plot.sydni <- function(x, type = c("marginal", "correlation"), variables = NULL,
     stop("Selected variables must be present in both observed and synthetic data.")
   }
 
+  if (identical(backend, "ggplot")) {
+    sydni_require_ggplot2()
+    if (identical(type, "marginal")) {
+      return(plot_sydni_ggplot_marginals(observed_data, synthetic_data, variables))
+    }
+    return(plot_sydni_ggplot_correlations(observed_data, synthetic_data, variables))
+  }
+
   if (identical(type, "marginal")) {
     plot_sydni_marginals(observed_data, synthetic_data, variables)
   } else {
     plot_sydni_correlations(observed_data, synthetic_data, variables)
   }
   invisible(x)
+}
+
+sydni_require_ggplot2 <- function() {
+  if (!requireNamespace("ggplot2", quietly = TRUE)) {
+    stop("`backend = \"ggplot\"` requires the suggested package `ggplot2`. ",
+         "Install it with `install.packages(\"ggplot2\")`.")
+  }
+}
+
+plot_sydni_ggplot_marginals <- function(observed_data, synthetic_data, variables) {
+  discrete <- vapply(variables, function(variable) {
+    is_sydni_discrete_variable(observed_data[[variable]])
+  }, logical(1))
+  if (any(discrete) && !all(discrete)) {
+    stop("`backend = \"ggplot\"` marginal plots require variables of one display type. ",
+         "Select either discrete or continuous variables, or use `backend = \"base\"`.")
+  }
+
+  if (all(discrete)) {
+    return(plot_sydni_ggplot_discrete_marginals(observed_data, synthetic_data, variables))
+  }
+  plot_sydni_ggplot_continuous_marginals(observed_data, synthetic_data, variables)
+}
+
+plot_sydni_ggplot_discrete_marginals <- function(observed_data, synthetic_data, variables) {
+  variable_levels <- lapply(variables, function(variable) {
+    sydni_discrete_levels(observed_data[[variable]], synthetic_data[[variable]])
+  })
+  levels <- unique(unlist(variable_levels, use.names = FALSE))
+  plot_data <- do.call(rbind, lapply(seq_along(variables), function(index) {
+    variable <- variables[[index]]
+    variable_levels <- variable_levels[[index]]
+    observed_prop <- prop.table(table(factor(as.character(observed_data[[variable]]),
+                                             levels = variable_levels)))
+    synthetic_prop <- prop.table(table(factor(as.character(synthetic_data[[variable]]),
+                                              levels = variable_levels)))
+    data.frame(
+      variable = variable,
+      source = rep(c("Observed", "Synthetic"), each = length(variable_levels)),
+      level = rep(variable_levels, 2),
+      proportion = c(as.numeric(observed_prop), as.numeric(synthetic_prop))
+    )
+  }))
+  plot_data$variable <- factor(plot_data$variable, levels = variables)
+  plot_data$source <- factor(plot_data$source, levels = c("Observed", "Synthetic"))
+  plot_data$level <- factor(plot_data$level, levels = levels)
+
+  ggplot2::ggplot(plot_data, ggplot2::aes(x = level, y = proportion, fill = source)) +
+    ggplot2::geom_col(position = ggplot2::position_dodge(width = 0.8), width = 0.7) +
+    ggplot2::facet_wrap(~variable, scales = "free_x") +
+    ggplot2::scale_fill_manual(values = c(Observed = "#4C78A8", Synthetic = "#F58518")) +
+    ggplot2::labs(x = NULL, y = "Proportion", fill = NULL) +
+    ggplot2::theme_minimal() +
+    ggplot2::theme(legend.position = "bottom", strip.text = ggplot2::element_text(face = "bold"))
+}
+
+plot_sydni_ggplot_continuous_marginals <- function(observed_data, synthetic_data, variables) {
+  plot_data <- do.call(rbind, lapply(variables, function(variable) {
+    observed <- observed_data[[variable]]
+    synthetic <- synthetic_data[[variable]]
+    observed <- observed[is.finite(observed)]
+    synthetic <- synthetic[is.finite(synthetic)]
+    if (length(observed) == 0 || length(synthetic) == 0) {
+      stop("Selected continuous variables must contain finite observed and synthetic values.")
+    }
+    data.frame(
+      variable = variable,
+      source = c(rep("Observed", length(observed)), rep("Synthetic", length(synthetic))),
+      value = c(observed, synthetic)
+    )
+  }))
+  plot_data$variable <- factor(plot_data$variable, levels = variables)
+  plot_data$source <- factor(plot_data$source, levels = c("Observed", "Synthetic"))
+
+  ggplot2::ggplot(plot_data, ggplot2::aes(x = value, colour = source, fill = source)) +
+    ggplot2::geom_density(alpha = 0.18, linewidth = 0.8) +
+    ggplot2::facet_wrap(~variable, scales = "free") +
+    ggplot2::scale_colour_manual(values = c(Observed = "#4C78A8", Synthetic = "#F58518")) +
+    ggplot2::scale_fill_manual(values = c(Observed = "#4C78A8", Synthetic = "#F58518")) +
+    ggplot2::labs(x = NULL, y = "Density", colour = NULL, fill = NULL) +
+    ggplot2::theme_minimal() +
+    ggplot2::theme(legend.position = "bottom", strip.text = ggplot2::element_text(face = "bold"))
+}
+
+plot_sydni_ggplot_correlations <- function(observed_data, synthetic_data, variables) {
+  eligible <- sydni_correlation_variables(observed_data, synthetic_data, variables)
+  observed_correlation <- sydni_correlation_matrix(observed_data, eligible)
+  synthetic_correlation <- sydni_correlation_matrix(synthetic_data, eligible)
+  plot_data <- rbind(
+    sydni_correlation_plot_data(observed_correlation, "Observed"),
+    sydni_correlation_plot_data(synthetic_correlation, "Synthetic")
+  )
+  plot_data$source <- factor(plot_data$source, levels = c("Observed", "Synthetic"))
+
+  ggplot2::ggplot(plot_data, ggplot2::aes(x = x, y = y, fill = correlation)) +
+    ggplot2::geom_tile(colour = "white", linewidth = 0.25) +
+    ggplot2::facet_wrap(~source) +
+    ggplot2::scale_fill_gradient2(
+      low = "#2166AC", mid = "#F7F7F7", high = "#B2182B", midpoint = 0,
+      limits = c(-1, 1), name = "Correlation"
+    ) +
+    ggplot2::coord_equal() +
+    ggplot2::labs(x = NULL, y = NULL) +
+    ggplot2::theme_minimal() +
+    ggplot2::theme(
+      axis.text.x = ggplot2::element_text(angle = 45, hjust = 1),
+      strip.text = ggplot2::element_text(face = "bold")
+    )
 }
 
 plot_sydni_marginals <- function(observed_data, synthetic_data, variables) {
@@ -269,6 +391,39 @@ plot_sydni_correlation_heatmap <- function(correlation, title) {
   graphics::axis(1, at = seq_len(n_variables), labels = colnames(correlation), las = 2)
   graphics::axis(2, at = seq_len(n_variables), labels = rev(colnames(correlation)), las = 2)
   graphics::box()
+}
+
+sydni_correlation_variables <- function(observed_data, synthetic_data, variables) {
+  eligible <- variables[vapply(variables, function(variable) {
+    observed <- observed_data[[variable]]
+    synthetic <- synthetic_data[[variable]]
+    supported <- (is.numeric(observed) || is.ordered(observed)) &&
+      (is.numeric(synthetic) || is.ordered(synthetic))
+    supported && length(unique(observed[!is.na(observed)])) > 1 &&
+      length(unique(synthetic[!is.na(synthetic)])) > 1
+  }, logical(1))]
+  if (length(eligible) < 2) {
+    stop("Correlation plots require at least two eligible numeric or ordered variables.")
+  }
+  eligible
+}
+
+sydni_correlation_matrix <- function(data, variables) {
+  matrix <- vapply(variables, function(variable) {
+    value <- data[[variable]]
+    if (is.ordered(value)) as.numeric(value) else value
+  }, numeric(nrow(data)))
+  colnames(matrix) <- variables
+  stats::cor(matrix, use = "pairwise.complete.obs")
+}
+
+sydni_correlation_plot_data <- function(correlation, source) {
+  data.frame(
+    x = factor(rep(colnames(correlation), each = nrow(correlation)), levels = colnames(correlation)),
+    y = factor(rep(rownames(correlation), times = ncol(correlation)), levels = rev(rownames(correlation))),
+    correlation = as.vector(correlation),
+    source = source
+  )
 }
 
 sydni_display_value <- function(value, none = "none") {

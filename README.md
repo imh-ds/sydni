@@ -216,6 +216,7 @@ print(result)
 summary(result)
 plot(result)
 plot(result, type = "correlation")
+plot(result, variables = c("o1", "o5"), backend = "ggplot")
 ```
 
 The returned object is a `sydni` S3 object with four components:
@@ -230,7 +231,10 @@ The returned object is a `sydni` S3 object with four components:
 `print()` gives a compact run overview and `summary()` records the settings
 needed to reproduce it. By default, `plot()` compares observed and synthetic
 marginal distributions; use `type = "correlation"` for side-by-side
-correlation heat maps of eligible numeric or ordered variables.
+correlation heat maps of eligible numeric or ordered variables. To produce an
+editable `ggplot2` diagnostic, use `backend = "ggplot"`; `ggplot2` is an
+optional suggested package. The ggplot marginal backend accepts a set of
+variables that share a display type (discrete or continuous).
 
 ## Automatic shrinkage and group balancing
 
