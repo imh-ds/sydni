@@ -816,14 +816,8 @@ dropped-term rates, warning counts, failure rates, runtime, and memory cost.
 ### 8.5 Result displays
 
 This paper does not present a single overall winner; results are instead
-ranked by benchmark family, using the following displays:
+organized by benchmark family and decision-relevant tradeoff:
 
-- **Table 1:** Type I error, false discovery, coverage, and augmentation-only
-  significance by scenario and method.
-- **Table 2:** Effect inflation and standard-error compression by augmentation
-  ratio.
-- **Table 3:** Correlation, psychometric, and subgroup-structure preservation
-  metrics.
 - **Figure 1:** Type I error, false discovery rate, and coverage by method
   across sample sizes.
 - **Figure 2:** Augmentation-only significance rate and power recovery rate
@@ -831,14 +825,20 @@ ranked by benchmark family, using the following displays:
 - **Figure 3:** Runtime diagnostics by method.
 - **Figure 4:** Flat-vs-measurement-aware paired comparison by engine across
   sample sizes.
+- **Section 8.6 tables:** matched-grid continuous-outcome engine tradeoffs and
+  their runtime consequences, with the ordinal-outcome factor engine reported
+  separately.
+- **Section 8.7 table:** matched-grid measurement-aware engine tradeoffs.
 
-Section 8.6 reports confirmation-scale numbers for Tables 1-3 and Figures
-1-3 on manifest variables; Section 8.7 reports a companion confirmation
-study isolating the measurement-aware calibration mechanism on a
-latent-variable item-battery design, including Figure 4; Section 9 reports
-a single-run empirical illustration. Section 12 discusses the need for
-additional data-generating designs beyond the two exercised here to assess
-generalizability.
+The confirmation CSVs report the full cell-level summaries and
+design-stratified Monte Carlo interval calculations; the main text retains
+only the comparisons needed to explain the workflow and its boundaries.
+Section 8.6 reports confirmation-scale numbers and Figures 1-3 on manifest
+variables; Section 8.7 reports a companion confirmation study isolating the
+measurement-aware calibration mechanism on a latent-variable item-battery
+design, including Figure 4; Section 9 reports a single-run empirical
+illustration. Section 12 discusses the need for additional data-generating
+designs beyond the two exercised here to assess generalizability.
 
 ### 8.6 Confirmed results
 
@@ -1061,11 +1061,10 @@ I error 0.129 (\(\pm\)0.005), power recovery 0.062 (\(\pm\)0.007),
 spurious-edge rate 0.0006 (\(\pm\)0.0002), at 1.28 seconds per condition;
 on the full (non-matched) grid, its false augmentation-only significance
 rate - the intended-use safety metric discussed above - is 0.087
-(\(\pm\)0.002). Within its own ordinal-outcome frame, these numbers
-are directionally favorable - lower Type I error and a lower spurious-edge
-rate than any of the four continuous-outcome engines above, at a runtime
-in the same broad cheap-engine range (fractions of a second to a few
-seconds) - but whether that favorable read would hold under the same
+(\(\pm\)0.002). Within its own ordinal-outcome frame, these numbers are
+directionally favorable, with low Type I error and spurious-edge estimates at
+a runtime in the same broad cheap-engine range (fractions of a second to a
+few seconds). Whether that favorable read would hold under the same
 continuous outcome the rest of this study uses is an open question this
 benchmark cannot answer, not a confirmed finding. Analysts whose actual
 outcome is genuinely ordinal or discretized should read this row as the
@@ -1291,6 +1290,13 @@ drawn from cells it was never run on. An earlier draft of this table
 mixed the two grids, which understated `sydni_bart_ma`'s power recovery
 (0.052 vs.\ 0.083 here) and, more importantly, made `sydni_brm_ma` look
 more competitive than the matched comparison supports.
+
+All point estimates in this and the Section 8.6 tradeoff table are equally
+weighted means of the predeclared design-cell means; their MCIs use that same
+estimand. The `sydni_brm_ma` row is based on 196 successful runs of the 200
+attempted (48, 49, 49, and 50 successful runs across the four cells), whereas
+every non-BRM row contains 400 successful runs. The failed-run count and its
+handling are reported above rather than silently removed.
 
 **Precision caveat: only 4 design cells support this table.** Unlike
 Section 8.6's 20-cell matched grid, this scenario's grid is
@@ -1599,7 +1605,8 @@ truth nor replication, and it cannot independently validate the benchmark
 results.
 
 Future work should address external validity now that both studies carry
-adequate Monte Carlo precision on their own designs: additional
+substantially improved Monte Carlo precision for their predeclared summaries:
+additional
 data-generating designs and empirical examples are needed, for both
 studies, to test generalizability beyond the specific scenarios and
 item-battery structure exercised here. Other priorities include improved

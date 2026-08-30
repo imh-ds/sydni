@@ -31,22 +31,16 @@ z975 <- qnorm(0.975)
 #' cells defined by `strata_cols`, restricted by an optional row filter
 #' already applied to `data` before calling this function.
 #'
-#' Assumes (and warns if violated) that every stratum has the same replicate
-#' count, which is true of every grid used in this confirmation study - the
-#' grand mean is then exactly the unweighted mean of the per-stratum means,
-#' and its variance is the average per-stratum replicate variance divided by
-#' (n_strata * reps_per_stratum).
+#' The estimand is the equally weighted mean of the per-stratum means. This is
+#' intentional: each predeclared design cell receives equal weight even when a
+#' fitting failure leaves it with fewer successful replicates. The variance is
+#' the sum of each cell mean's sampling variance, divided by the square of the
+#' number of strata.
 stratified_mcse <- function(data, strata_cols, metric_col) {
   data <- data[!is.na(data[[metric_col]]), ]
   cell_id <- interaction(data[strata_cols], drop = TRUE)
   by_cell <- split(data[[metric_col]], cell_id)
   reps <- vapply(by_cell, length, integer(1))
-  if (length(unique(reps)) > 1) {
-    warning(sprintf(
-      "Unbalanced replicate counts across strata (%s): %s",
-      paste(strata_cols, collapse = "/"), paste(unique(reps), collapse = ",")
-    ))
-  }
   cell_means <- vapply(by_cell, mean, numeric(1))
   cell_vars <- vapply(by_cell, function(x) if (length(x) > 1) stats::var(x) else NA_real_, numeric(1))
   h <- length(by_cell)
