@@ -55,6 +55,25 @@ test_that("sydni plots observed-versus-synthetic marginal and correlation diagno
   expect_true(file.exists(plot_path))
 })
 
+test_that("sydni treats low-cardinality integer-like numeric variables as discrete", {
+  expect_true(is_sydni_discrete_variable(c(1, 2, 3, 4, 5)))
+  expect_true(is_sydni_discrete_variable(c(1, 2, 3, 4, 5) + 0))
+  expect_true(is_sydni_discrete_variable(factor(c("low", "high"))))
+  expect_false(is_sydni_discrete_variable(c(1.1, 2.2, 3.3, 4.4)))
+  expect_false(is_sydni_discrete_variable(seq_len(11)))
+})
+
+test_that("sydni orders discrete numeric categories naturally in marginal plots", {
+  expect_identical(
+    sydni_discrete_levels(c(3, 1, 2), c(5, 4, 2)),
+    c("1", "2", "3", "4", "5")
+  )
+  expect_identical(
+    sydni_discrete_levels(factor(c("medium", "low"), levels = c("low", "medium", "high")), "high"),
+    c("low", "medium", "high")
+  )
+})
+
 test_that("sydni correlation plots reject requests with fewer than two eligible variables", {
   out <- make_sydni_s3_fixture()
 

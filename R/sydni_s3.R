@@ -147,8 +147,7 @@ plot_sydni_marginals <- function(observed_data, synthetic_data, variables) {
   for (variable in variables) {
     observed <- observed_data[[variable]]
     synthetic <- synthetic_data[[variable]]
-    if (is.factor(observed) || is.ordered(observed) || is.character(observed) ||
-        (is.integer(observed) && length(unique(observed[!is.na(observed)])) <= 10L)) {
+    if (is_sydni_discrete_variable(observed)) {
       plot_sydni_discrete_marginal(observed, synthetic, variable)
     } else {
       plot_sydni_continuous_marginal(observed, synthetic, variable)
@@ -157,7 +156,7 @@ plot_sydni_marginals <- function(observed_data, synthetic_data, variables) {
 }
 
 plot_sydni_discrete_marginal <- function(observed, synthetic, variable) {
-  levels <- union(as.character(observed), as.character(synthetic))
+  levels <- sydni_discrete_levels(observed, synthetic)
   observed_prop <- prop.table(table(factor(as.character(observed), levels = levels)))
   synthetic_prop <- prop.table(table(factor(as.character(synthetic), levels = levels)))
   graphics::barplot(
@@ -253,4 +252,36 @@ sydni_display_value <- function(value, none = "none") {
     return(none)
   }
   paste(value, collapse = ", ")
+}
+
+is_sydni_discrete_variable <- function(value, max_levels = 10L) {
+  if (is.factor(value) || is.ordered(value) || is.character(value) || is.logical(value)) {
+    return(TRUE)
+  }
+  if (!is.numeric(value)) {
+    return(FALSE)
+  }
+  finite_values <- value[is.finite(value)]
+  if (length(finite_values) == 0) {
+    return(FALSE)
+  }
+  length(unique(finite_values)) <= max_levels &&
+    all(abs(finite_values - round(finite_values)) < sqrt(.Machine$double.eps))
+}
+
+sydni_discrete_levels <- function(observed, synthetic) {
+  observed_levels <- if (is.factor(observed)) levels(observed) else NULL
+  values <- unique(c(as.character(observed), as.character(synthetic)))
+  values <- values[!is.na(values)]
+
+  if (!is.null(observed_levels)) {
+    return(c(observed_levels, sort(setdiff(values, observed_levels))))
+  }
+
+  numeric_values <- suppressWarnings(as.numeric(values))
+  if (length(values) > 0L && all(!is.na(numeric_values))) {
+    return(as.character(sort(unique(numeric_values))))
+  }
+
+  sort(values)
 }
