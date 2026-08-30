@@ -55,6 +55,22 @@ test_that("sydni plots observed-versus-synthetic marginal and correlation diagno
   expect_true(file.exists(plot_path))
 })
 
+test_that("sydni can draw a shared marginal-plot legend", {
+  plot_path <- tempfile(fileext = ".png")
+  grDevices::png(plot_path)
+  on.exit(grDevices::dev.off(), add = TRUE)
+
+  expect_invisible(plot_sydni_marginal_legend())
+  expect_true(file.exists(plot_path))
+})
+
+test_that("sydni lays out marginal panels in variable order", {
+  expect_identical(
+    sydni_marginal_layout(6L, 2L),
+    rbind(c(1L, 2L), c(3L, 4L), c(5L, 6L), c(7L, 7L))
+  )
+})
+
 test_that("sydni treats low-cardinality integer-like numeric variables as discrete", {
   expect_true(is_sydni_discrete_variable(c(1, 2, 3, 4, 5)))
   expect_true(is_sydni_discrete_variable(c(1, 2, 3, 4, 5) + 0))

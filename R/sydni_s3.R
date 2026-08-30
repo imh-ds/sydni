@@ -140,9 +140,12 @@ plot.sydni <- function(x, type = c("marginal", "correlation"), variables = NULL,
 
 plot_sydni_marginals <- function(observed_data, synthetic_data, variables) {
   n_columns <- min(2L, length(variables))
+  layout_matrix <- sydni_marginal_layout(length(variables), n_columns)
+  n_rows <- nrow(layout_matrix) - 1L
   old_par <- graphics::par(no.readonly = TRUE)
   on.exit(graphics::par(old_par), add = TRUE)
-  graphics::par(mfrow = c(ceiling(length(variables) / n_columns), n_columns))
+  graphics::layout(layout_matrix, heights = c(rep(1, n_rows), 0.16))
+  graphics::par(mar = c(3.5, 4, 2.5, 0.8))
 
   for (variable in variables) {
     observed <- observed_data[[variable]]
@@ -153,6 +156,17 @@ plot_sydni_marginals <- function(observed_data, synthetic_data, variables) {
       plot_sydni_continuous_marginal(observed, synthetic, variable)
     }
   }
+
+  graphics::par(mar = c(0, 0, 0, 0))
+  plot_sydni_marginal_legend()
+}
+
+sydni_marginal_layout <- function(n_variables, n_columns) {
+  n_rows <- ceiling(n_variables / n_columns)
+  panel_ids <- c(seq_len(n_variables), rep(0L, n_rows * n_columns - n_variables))
+  panel_ids <- matrix(panel_ids, nrow = n_rows, ncol = n_columns, byrow = TRUE)
+  legend_id <- n_variables + 1L
+  rbind(panel_ids, rep(legend_id, n_columns))
 }
 
 plot_sydni_discrete_marginal <- function(observed, synthetic, variable) {
@@ -164,9 +178,7 @@ plot_sydni_discrete_marginal <- function(observed, synthetic, variable) {
     beside = TRUE,
     col = c("#4C78A8", "#F58518"),
     main = variable,
-    ylab = "Proportion",
-    legend.text = TRUE,
-    args.legend = list(x = "topright", bty = "n")
+    ylab = "Proportion"
   )
 }
 
@@ -193,8 +205,20 @@ plot_sydni_continuous_marginal <- function(observed, synthetic, variable) {
                    xlab = variable, ylab = "Density", col = "#4C78A8")
     graphics::lines(synthetic_density, col = "#F58518")
   }
-  graphics::legend("topright", legend = c("Observed", "Synthetic"),
-                   col = c("#4C78A8", "#F58518"), lty = 1, bty = "n")
+}
+
+plot_sydni_marginal_legend <- function() {
+  graphics::plot.new()
+  graphics::plot.window(xlim = c(0, 1), ylim = c(0, 1))
+  graphics::legend(
+    x = "center",
+    y = "center",
+    legend = c("Observed", "Synthetic"),
+    fill = c("#4C78A8", "#F58518"),
+    horiz = TRUE,
+    bty = "n"
+  )
+  invisible(NULL)
 }
 
 plot_sydni_correlations <- function(observed_data, synthetic_data, variables) {
