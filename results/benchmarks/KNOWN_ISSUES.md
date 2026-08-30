@@ -28,3 +28,45 @@ subgroups - train on the larger sample rather than pre-filtering to the
 exact small subgroup of interest before fitting. Left as-is; not blocking
 interpretation of the rest of the `sydni_brm` results, which are otherwise
 0% failures across the remaining 626 rows.
+
+## sydni_brm_ma: rare failures during the Study 2 confirmation run
+
+4 of 400 `sydni_brm_ma`/`sydni_brm_flat` rows in
+`confirmation/study2_brm_confirmation_raw.csv` (~1%) have `failed == TRUE`,
+all `sydni_brm_ma` (none `sydni_brm_flat`), of two distinct kinds:
+
+**2 of 4: the same ADVI fitting crash documented above**
+(`n_obs = 150, aug_ratio = 2, replicate = 20` and
+`n_obs = 75, aug_ratio = 1, replicate = 39`), same
+`Error: Fitting failed. Unable to retrieve the metadata.` signature. Not a
+new failure mode - the same known fullrank-ADVI reliability limit,
+recurring here because `sydni_brm_ma` fits multiple per-construct BRM
+submodels per condition, giving more chances for any one of them to hit it.
+
+**2 of 4: a transient compilation-time error**
+(`n_obs = 75, aug_ratio = 1, replicate = 17` and
+`n_obs = 150, aug_ratio = 1, replicate = 26`), message
+`An error occured during compilation! See the message above for more
+information.` Investigated and confirmed **not reproducible**: both
+conditions were re-run in isolation (single worker, no concurrent access to
+the shared `stan_cache` directory) and succeeded cleanly on the first
+retry, with no code or data change. The underlying model structure is
+deliberately held fixed across replicates specifically to keep the
+compiled Stan binary stable (see the `predictor_method = "full"` comment in
+`simulate_measurement_aware_data()`), which rules out a data-dependent
+degenerate-model explanation like the one found and fixed earlier in Study
+1 (the `small_cell` constant-covariate bug). The most likely cause is
+transient Windows-level contention (file locking or antivirus scanning)
+when multiple parallel workers concurrently execute the same already-
+compiled `.exe` - the same general class of Windows/cmdstanr fragility
+already noted above for the persistent Stan model cache, just surfacing at
+execute time instead of first-compile time. The compile warm-up pass added
+to the confirmation runners prevents the first-compile race; it does not
+guarantee every later concurrent execution is contention-free.
+
+Not treated as a bug to fix: both failures are non-deterministic (unlike
+the ADVI crash, which reproduces on the same seed every time) and are
+already recorded gracefully as `failed = TRUE` rows with `error_message`/
+`error_time` rather than crashing the run, so they cost one lost
+replicate each rather than corrupting or blocking anything else. Left
+as-is; not blocking interpretation of the remaining 396 rows.

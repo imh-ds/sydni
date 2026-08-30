@@ -13,6 +13,9 @@
 # Local development package library
 ^local_r_lib$
 
+# Persistent cmdstanr compiled-model cache for benchmark runs
+^stan_cache$
+
 # Development experiments, manuscripts, and benchmark outputs
 ^tests/3_Experiments$
 ^inst/benchmarks$

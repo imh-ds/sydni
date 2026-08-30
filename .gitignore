@@ -57,6 +57,11 @@ Legacy/
 # Local development package library
 local_r_lib/
 
+# Persistent cmdstanr compiled-model cache for benchmark runs (see
+# inst/benchmarks/README.md) - keeps compiled .exe/.hpp/.stan artifacts out
+# of git and out of a fresh temp folder every run.
+stan_cache/
+
 # Development experiments, manuscripts, and benchmark outputs
 tests/3_Experiments/
 tests/internal/
