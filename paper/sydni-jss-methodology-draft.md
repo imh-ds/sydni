@@ -905,10 +905,13 @@ section.
 **Intended-use safety.** Under SYDNI's documented secondary-check
 workflow, the false-positive rate for effects that were null in the
 observed data but spuriously significant only after augmentation
-(`false_augmentation_only_sig_rate`) was lowest for `sydni_factor`
-(0.087) and `sydni_graphical` (0.102), and highest among the SYDNI/synthpop
-engines for `sydni_copula` (0.132, narrowly above `sydni_bart`'s 0.126) -
+(`false_augmentation_only_sig_rate`) was lowest among the four
+continuous-outcome SYDNI engines for `sydni_graphical` (0.102), and
+highest for `sydni_copula` (0.132, narrowly above `sydni_bart`'s 0.126) -
 all still well below every off-label comparator (0.167-0.204).
+(`sydni_factor`'s rate on this metric, computed on its discretized
+outcome and not directly comparable to the figures above, is reported
+separately below: 0.087 - see the `sydni_factor` subsection.)
 
 ![Figure 2: Intended-use safety - false augmentation-only significance rate and power recovery rate across n_obs, by method.](figures/figure2_aug_only_sig.png)
 
@@ -948,49 +951,42 @@ one scale, and the confirmation run's role is to show what each tradeoff
 actually costs and buys.
 
 Because `sydni_brm` was confirmed on a narrower grid (above), the other
-four engines below are restricted to the matching subset of scenarios,
-sample sizes, and augmentation ratios rather than their full confirmed
-grid, so every row in this table is drawn from a like-for-like comparison:
+engines below are restricted to the matching subset of scenarios, sample
+sizes, and augmentation ratios rather than their full confirmed grid, so
+every row in this table is drawn from a like-for-like comparison.
+`sydni_factor` is deliberately excluded from this table and reported
+separately afterward: `engine_factor()` requires ordinal/integer input,
+so its numbers come from a discretized version of the continuous outcome
+`y`, while every engine below uses the same continuous `y` used
+elsewhere in this benchmark - ranking it alongside engines evaluated on
+a different outcome would imply a like-for-like comparison that does not
+hold.
 
 \begin{center}
 \begin{tabular}{lrrrr}
 \hline
 Engine & Type I error (rank) & Power recovery (rank) & Spurious-edge rate (rank) & sec/condition \\
 \hline
-\texttt{sydni\_factor}    & 0.129 (1st, safest) & 0.062 (3rd)          & 0.0006 (1st, best)  & 1.28 \\
-\texttt{sydni\_graphical} & 0.143 (2nd)         & 0.053 (5th, worst)   & 0.0008 (2nd)        & 0.03 \\
-\texttt{sydni\_brm}       & 0.148 (3rd)         & 0.059 (4th)          & 0.0009 (3rd)        & 113.21 \\
-\texttt{sydni\_copula}    & 0.199 (4th)         & 0.080 (1st, best)    & 0.0019 (4th)        & 0.03 \\
-\texttt{sydni\_bart}      & 0.203 (5th, worst)  & 0.073 (2nd)          & 0.0150 (5th, worst) & 0.30 \\
+\texttt{sydni\_graphical} & 0.143 (1st, safest) & 0.053 (4th, worst)   & 0.0008 (1st, best)  & 0.03 \\
+\texttt{sydni\_brm}       & 0.148 (2nd)         & 0.059 (3rd)          & 0.0009 (2nd)        & 113.21 \\
+\texttt{sydni\_copula}    & 0.199 (3rd)         & 0.080 (1st, best)    & 0.0019 (3rd)        & 0.03 \\
+\texttt{sydni\_bart}      & 0.203 (4th, worst)  & 0.073 (2nd)          & 0.0150 (4th, worst) & 0.30 \\
 \hline
 \end{tabular}
 \end{center}
 
-**`sydni_factor`'s row is not directly comparable in magnitude to the
-other four engines' rows.** `engine_factor()` requires ordinal/integer
-input, so its numbers come from a discretized version of the continuous
-outcome `y`, while the other four engines' numbers come from the same
-continuous `y` used elsewhere in this benchmark. `sydni_factor`'s rank
-positions above are directional evidence about the factor engine on its
-own terms, not a like-for-like comparison against the other four -
-"1st, safest" and similar labels should be read with that qualification
-rather than as a claim that `sydni_factor` is safer than the other
-engines under an identical outcome.
-
 At this replication count (1,000-2,000 conditions per engine on the
 matched grid), most of these ranks are resolved well outside Monte Carlo
 noise - the 95% interval half-width on every cell above is under 0.7
-percentage points. Two adjacent pairs are the exception and should still
+percentage points. One adjacent pair is the exception and should still
 be read as directional rather than confirmed: `sydni_graphical` and
 `sydni_brm` on Type I error (0.143 vs.\ 0.148, within one combined
-standard error of each other), and `sydni_copula` and `sydni_bart` on
-Type I error (0.199 vs.\ 0.203, likewise). `sydni_bart`'s spurious-edge
-rate is the one large, unambiguous outlier in this table - roughly 8-25x
-every other engine's rate, including `sydni_brm`'s - and is discussed
-further below.
+standard error of each other). `sydni_bart`'s spurious-edge rate is the
+one large, unambiguous outlier in this table - roughly 8-19x every other
+engine's rate, including `sydni_brm`'s - and is discussed further below.
 
 The runtime column changes the interpretation of this table substantially.
-`sydni_brm` is never worst on any of the three axes above (3rd, 4th, 3rd)
+`sydni_brm` is never worst on any of the three axes above (2nd, 3rd, 2nd)
 - a real, defensible sense of "balanced" - but costs roughly three orders
 of magnitude more compute than every other engine. Comparing each engine
 against `sydni_brm` directly (gap = engine minus `sydni_brm`; negative
@@ -1006,40 +1002,54 @@ Engine & Speedup vs.\ \texttt{sydni\_brm} & Type I gap & Power gap & Spurious-ra
 \texttt{sydni\_graphical} & 3{,}789x & $-$0.005 (\textasciitilde tied) & $-$0.006 (worse) & $-$0.0001 (\textasciitilde tied) \\
 \texttt{sydni\_copula}    & 3{,}580x & $+$0.051 (worse)  & $+$0.022 (better)               & $+$0.0010 (worse) \\
 \texttt{sydni\_bart}      & 380x     & $+$0.056 (worse)  & $+$0.014 (better)  & $+$0.0141 (much worse) \\
-\texttt{sydni\_factor}    & 88x      & $-$0.019 (safer)  & $+$0.003 (\textasciitilde tied)  & $-$0.0004 (\textasciitilde tied) \\
 \hline
 \end{tabular}
 \end{center}
 
-This splits the family into three roles rather than a single ranking, and
-the corrected structure metric changes two of them from the pilot's
-provisional read. `sydni_brm` is the reference point when compute is not
-a binding constraint and no single axis dominates the analyst's priority,
-at a cost of the rare small/sparse-data ADVI fitting failure noted below.
-`sydni_factor` - not `sydni_copula` - is now the strongest all-around
-cheap alternative on the fair structure metric: it leads the entire
-family on both Type I error and spurious-edge suppression at 88x less
-compute than `sydni_brm`, with power recovery statistically tied to
-`sydni_brm`'s, subject throughout to the discretized-outcome caveat noted
-above the engine-tradeoff table. `sydni_copula` remains the power-recovery
-leader by a clear margin and is the better choice when recovering real
-effects matters more than minimizing false positives, at the price of a
-Type I error gap comparable to `sydni_bart`'s. `sydni_bart` is the
-weakest engine in the family on the fair structure metric - its
-spurious-edge rate is 8-25x every other engine's, including `sydni_brm`'s
-- and is not recommended as a default choice; its one genuine advantage
-is power recovery competitive with `sydni_copula`'s at less compute,
-which may still make it worth reaching for when that specific tradeoff is
-wanted and the elevated spurious-correlation rate is an acceptable cost.
-`sydni_graphical` sits closest to `sydni_brm` of the four cheap engines -
-tied on both Type I error and spurious-edge rate at 3,789x less compute -
-giving up ground only on power recovery, where it is the family's
-weakest. No engine needs to lead every metric to be useful: no
-simulation-based benchmark can realistically cover the full space of
-real-world data an analyst might encounter, and having several
-structurally different, inexpensive options available is itself part of
-the value of SYDNI's multi-engine design, independent of any one engine's
-ranking here.
+This splits the (non-`sydni_factor`) family into three roles rather than
+a single ranking. `sydni_brm` is the reference point when compute is not
+a binding constraint and no single axis dominates the analyst's
+priority, at a cost of the rare small/sparse-data ADVI fitting failure
+noted below. `sydni_graphical` is the strongest all-around cheap
+alternative on the fair structure metric: it leads these four engines on
+both Type I error and spurious-edge suppression at 3,789x less compute
+than `sydni_brm`, giving up ground only on power recovery, where it is
+the family's weakest. `sydni_copula` remains the power-recovery leader by
+a clear margin and is the better choice when recovering real effects
+matters more than minimizing false positives, at the price of a Type I
+error gap comparable to `sydni_bart`'s. `sydni_bart` is the weakest
+engine in the family on the fair structure metric - its spurious-edge
+rate is 8-19x every other engine's, including `sydni_brm`'s - and is not
+recommended as a default choice; its one genuine advantage is power
+recovery competitive with `sydni_copula`'s at less compute, which may
+still make it worth reaching for when that specific tradeoff is wanted
+and the elevated spurious-correlation rate is an acceptable cost. No
+engine needs to lead every metric to be useful: no simulation-based
+benchmark can realistically cover the full space of real-world data an
+analyst might encounter, and having several structurally different,
+inexpensive options available is itself part of the value of SYDNI's
+multi-engine design, independent of any one engine's ranking here.
+
+**`sydni_factor`'s results: ordinal outcome, reported separately.**
+Because `engine_factor()` was evaluated against a discretized version of
+`y` rather than the continuous outcome every other engine above used,
+its numbers are not placed in the ranked table, the speedup table, or
+any "Nth of five" comparison - doing so would imply a like-for-like
+comparison that the design of this benchmark does not support. On the
+same matched grid used above, `sydni_factor`'s own numbers are: Type I
+error 0.129, power recovery 0.062, spurious-edge rate 0.0006, at 1.28
+seconds per condition; on the full (non-matched) grid, its false
+augmentation-only significance rate - the intended-use safety metric
+discussed above - is 0.087. Within its own ordinal-outcome frame, these numbers
+are directionally favorable - lower Type I error and a lower spurious-edge
+rate than any of the four continuous-outcome engines above, at a runtime
+in the same broad cheap-engine range (fractions of a second to a few
+seconds) - but whether that favorable read would hold under the same
+continuous outcome the rest of this study uses is an open question this
+benchmark cannot answer, not a confirmed finding. Analysts whose actual
+outcome is genuinely ordinal or discretized should read this row as the
+directly relevant evidence; analysts comparing engines for a continuous
+outcome should use the four-engine table above instead.
 
 Separately from the cross-engine comparison above, `sydni_brm` showed
 zero fitting failures across all 1,000 confirmed conditions in this
@@ -1310,7 +1320,7 @@ rather than one global engine ranking:
 \hline
 User need & Recommended engine(s) & Evidence source \\
 \hline
-Manifest/composite predictors, no indicator data & \texttt{sydni\_brm} (reference); \texttt{sydni\_factor} (strongest cheap all-arounder); \texttt{sydni\_copula} (power-recovery leader); \texttt{sydni\_graphical} (cheap, closest to \texttt{sydni\_brm}); \texttt{sydni\_bart} (power specialist, not a default) & Section 8.6 \\
+Manifest/composite predictors, no indicator data & \texttt{sydni\_brm} (reference); \texttt{sydni\_graphical} (strongest cheap all-arounder); \texttt{sydni\_copula} (power-recovery leader); \texttt{sydni\_bart} (power specialist, not a default); \texttt{sydni\_factor} (ordinal outcomes only - not cross-engine comparable) & Section 8.6 \\
 Indicator-level data, composite-score output only & Supply \texttt{measurement\_blocks} regardless of engine & Section 8.7 (flat vs.\ ma) \\
 Indicator-level data, item-level/SEM output needed & \texttt{sydni\_factor\_ma}/\texttt{sydni\_graphical\_ma} (defaults); \texttt{sydni\_bart\_ma} (power/between-construct specialist); \texttt{sydni\_brm\_ma} (viable but expensive, no demonstrated payoff) & Section 8.7 (ma arm) \\
 \hline
@@ -1703,15 +1713,20 @@ Method & Mean absolute correlation error \\
 
 Read against Section 8.6's fair structure metrics
 (`null_edge_spurious_rate`, `cor_sign_reversal_rate`), the ordering here
-is close to inverted for several methods: `sydni_factor` and
-`sydni_graphical` post the two largest raw correlation errors in this
-table while simultaneously posting the two lowest spurious-edge rates in
-Section 8.6's engine-tradeoff table, and the four off-label comparators
-post the smallest raw errors here while showing no deliberate shrinkage
-mechanism at all - they simply perturb the data little enough that
-little moves. This table should be read as a description of how much
-each method's synthetic data numerically differs from the observed
-correlation structure, not as a ranking of data quality.
+is close to inverted for several methods: `sydni_graphical` posts the
+second-largest raw correlation error in this table while simultaneously
+posting the lowest spurious-edge rate of the four continuous-outcome
+engines in Section 8.6's engine-tradeoff table (0.0008); `sydni_factor`
+posts the single largest raw correlation error here while posting the
+lowest spurious-edge rate on its own ordinal-outcome terms in the
+`sydni_factor` subsection of Section 8.6 (0.0006, not directly comparable
+to `sydni_graphical`'s figure - see that subsection); and the four
+off-label comparators post the smallest raw errors here while showing no
+deliberate shrinkage mechanism at all - they simply perturb the data
+little enough that little moves. This table should be read as a
+description of how much each method's synthetic data numerically differs
+from the observed correlation structure, not as a ranking of data
+quality.
 
 ## 13. References
 
