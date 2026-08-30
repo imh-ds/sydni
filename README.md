@@ -212,15 +212,25 @@ result <- sydni(
   seed = 123
 )
 
-head(result$data)
+print(result)
+summary(result)
+plot(result)
+plot(result, type = "correlation")
 ```
 
-The returned object has three components:
+The returned object is a `sydni` S3 object with four components:
 
 - `models`: fitted model objects or engine-specific model summaries
 - `data`: the synthetic dataset
 - `meta`: lightweight metadata with generation settings and an input
-  summary, not the full original dataset
+  summary
+- `observed_data`: the selected observed variables and covariates used for
+  synthesis, retained for self-contained diagnostic comparisons
+
+`print()` gives a compact run overview and `summary()` records the settings
+needed to reproduce it. By default, `plot()` compares observed and synthetic
+marginal distributions; use `type = "correlation"` for side-by-side
+correlation heat maps of eligible numeric or ordered variables.
 
 ## Automatic shrinkage and group balancing
 
