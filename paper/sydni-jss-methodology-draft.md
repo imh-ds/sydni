@@ -1058,10 +1058,14 @@ of a second).
 SYDNI engines against off-label comparators, confirmation-run data.
 `observed_only` and `synthpop`'s sample-based variant are omitted as
 near-zero-runtime reference/floor baselines rather than real comparators
-(see above). 1 of 69,300 non-`sydni_brm` conditions failed to complete (a
-degenerate `small_cell` draw at the smallest sample size, now handled as
-a recorded failure rather than a benchmark-harness crash - see
-`KNOWN_ISSUES.md`); 0 of 1,000 `sydni_brm` conditions failed (see above).
+(see above). One degenerate simulated draw - `small_cell`, \(n_{\mathrm{obs}} = 75\),
+\(n_{\mathrm{syn}}/n_{\mathrm{obs}} = 2\), replicate 97, where the
+smallest-cell subgroup happened to receive zero observations, collapsing
+`group` to a constant column - affected 11 of the 69,300 non-`sydni_brm`
+method-level conditions (one row per method that fit on that replicate),
+now handled as 11 recorded failures rather than a benchmark-harness
+crash - see `KNOWN_ISSUES.md`; 0 of 1,000 `sydni_brm` conditions failed
+(see above).
 Every method also emits occasional informational package notices (e.g.,
 ordinal-as-numeric, small-subgroup, or missing-`measurement_blocks`
 notices) unrelated to

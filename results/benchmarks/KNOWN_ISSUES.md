@@ -1,5 +1,32 @@
 # Known issues
 
+## small_cell: one degenerate draw during the Study 1 confirmation run
+
+11 of 69,300 rows in `confirmation/study1_nonbrm_confirmation_raw.csv`
+(~0.02%) have `failed == TRUE`, all from a single simulated draw:
+`scenario = small_cell`, `n_obs = 75`, `aug_ratio = 2`, `replicate = 97`
+- one row per method that attempted to fit on that replicate (`sim_seed`
+depends on `replicate`/`n_obs`/`aug_ratio` but not `method`, so every
+method independently drew the same degenerate data).
+
+Root cause: at `n_obs = 75`, `small_cell`'s smallest subgroup can by
+chance receive zero observations, collapsing the `group` covariate to a
+constant column. `lm()`'s contrasts then throw `"contrasts can be
+applied only to factors with 2 or more levels"` (or an equivalent
+degenerate-fit error depending on the method). This is the same failure
+mode described in the `error_row()` comment at
+`inst/benchmarks/inferential_safety_framework.R:608-618`, which explains
+why every method's fit on this replicate is caught and recorded as a
+graceful failure instead of crashing the parallel worker.
+
+Not treated as a bug to fix: it's an expected, low-probability
+consequence of drawing a subgroup indicator at small `n_obs`, not a
+package defect. It is caught and recorded as 11 graceful `failed = TRUE`
+rows (via the `error_row()`/backstop-`tryCatch` pattern) rather than
+crashing the run, so it costs 11 lost method-level conditions rather
+than corrupting or blocking anything else. Left as-is; not blocking
+interpretation of the remaining 69,289 rows.
+
 ## sydni_brm: rare ADVI fitting failures on small/sparse data
 
 4 of 630 `sydni_brm` rows in `inferential_safety_pilot_raw.csv` (~0.6%) have
@@ -54,8 +81,9 @@ retry, with no code or data change. The underlying model structure is
 deliberately held fixed across replicates specifically to keep the
 compiled Stan binary stable (see the `predictor_method = "full"` comment in
 `simulate_measurement_aware_data()`), which rules out a data-dependent
-degenerate-model explanation like the one found and fixed earlier in Study
-1 (the `small_cell` constant-covariate bug). The most likely cause is
+degenerate-model explanation like the `small_cell` constant-covariate
+draw documented above for Study 1 (recorded gracefully, not a bug to
+fix). The most likely cause is
 transient Windows-level contention (file locking or antivirus scanning)
 when multiple parallel workers concurrently execute the same already-
 compiled `.exe` - the same general class of Windows/cmdstanr fragility
