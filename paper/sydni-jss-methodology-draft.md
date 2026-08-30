@@ -858,9 +858,17 @@ the 7 scenarios (`null_only`, `sparse_effects`, `correlated_predictors`,
 \(n_{\mathrm{syn}}/n_{\mathrm{obs}} \in \{1, 2\}\), 1,000 conditions.
 `sydni_brm` was confirmed on a narrower grid because it costs roughly
 three orders of magnitude more compute per condition than every other
-method (Figure 3); at 50 replications its pooled 95% Monte Carlo interval
-half-width is already under 1 percentage point on every primary metric
-below, and reaches this precision at a small fraction of the compute a
+method (Figure 3); at 50 replications its design-stratified 95% Monte
+Carlo interval (MCI) half-width - computed per design cell and combined
+across the predeclared grid rather than pooled naively across all rows,
+which would conflate real by-design heterogeneity across cells with
+genuine Monte Carlo error; see
+`results/benchmarks/confirmation/compute_confirmation_mcse.R` for the
+reproducing code and `study1_confirmation_mcse.csv` for every cell - is
+under 0.75 percentage points on three of the four primary metrics below
+(Type I error, spurious-edge rate, false augmentation-only significance
+rate) and 1.01 percentage points on the fourth and widest, power
+recovery, reaching this precision at a small fraction of the compute a
 full-grid, 100-replication confirmation would have cost, without changing
 any conclusion reported here. The original pilot is retained as
 exploratory context in `results/benchmarks/FINDINGS.md` in the package
@@ -876,10 +884,14 @@ mix rather than a real difference.
 **Off-label stress test.** Every SYDNI engine and `synthpop`'s CART
 variant clearly outperformed the off-label bootstrap/SMOTE/ADASYN
 comparators on Type I error, consistently across all three sample sizes
-tested: a pooled Type I error rate of 0.160 averaged across the five
-SYDNI engines and `synthpop_cart`, against 0.248 averaged across
-bootstrap/noise-bootstrap/SMOTE/ADASYN - roughly 1.5x, not the 2x
-suggested by the smaller pilot. This was true even though these
+tested: a pooled Type I error rate of 0.162 (\(\pm\)0.001 95% MCI
+half-width, design-stratified by method/scenario/n\(_{\mathrm{obs}}\)/
+augmentation-ratio cell - see
+`results/benchmarks/confirmation/study1_confirmation_mcse.csv`) averaged
+across the five SYDNI engines and `synthpop_cart`, against 0.248
+(\(\pm\)0.002) averaged across bootstrap/noise-bootstrap/SMOTE/ADASYN -
+roughly 1.5x, not the 2x suggested by the smaller pilot. This was true
+even though these
 comparator methods were evaluated under the same discouraged
 pooled-analysis usage as SYDNI itself in this stress test, not under
 their own intended use cases.
@@ -906,12 +918,13 @@ section.
 workflow, the false-positive rate for effects that were null in the
 observed data but spuriously significant only after augmentation
 (`false_augmentation_only_sig_rate`) was lowest among the four
-continuous-outcome SYDNI engines for `sydni_graphical` (0.102), and
-highest for `sydni_copula` (0.132, narrowly above `sydni_bart`'s 0.126) -
-all still well below every off-label comparator (0.167-0.204).
-(`sydni_factor`'s rate on this metric, computed on its discretized
-outcome and not directly comparable to the figures above, is reported
-separately below: 0.087 - see the `sydni_factor` subsection.)
+continuous-outcome SYDNI engines for `sydni_graphical` (0.102,
+\(\pm\)0.002 95% MCI half-width), and highest for `sydni_copula` (0.132,
+\(\pm\)0.003, narrowly above `sydni_bart`'s 0.126, \(\pm\)0.003) - all
+still well below every off-label comparator (0.167-0.204). (`sydni_factor`'s
+rate on this metric, computed on its discretized outcome and not directly
+comparable to the figures above, is reported separately below: 0.087 -
+see the `sydni_factor` subsection.)
 
 ![Figure 2: Intended-use safety - false augmentation-only significance rate and power recovery rate across n_obs, by method.](figures/figure2_aug_only_sig.png)
 
@@ -977,13 +990,19 @@ Engine & Type I error (rank) & Power recovery (rank) & Spurious-edge rate (rank)
 
 At this replication count (1,000-2,000 conditions per engine on the
 matched grid), most of these ranks are resolved well outside Monte Carlo
-noise - the 95% interval half-width on every cell above is under 0.7
-percentage points. One adjacent pair is the exception and should still
-be read as directional rather than confirmed: `sydni_graphical` and
-`sydni_brm` on Type I error (0.143 vs.\ 0.148, within one combined
-standard error of each other). `sydni_bart`'s spurious-edge rate is the
-one large, unambiguous outlier in this table - roughly 8-19x every other
-engine's rate, including `sydni_brm`'s - and is discussed further below.
+noise - the design-stratified 95% MCI half-width (full per-cell detail in
+`results/benchmarks/confirmation/study1_confirmation_mcse.csv`) is under
+0.8 percentage points on every cell in this table except `sydni_brm`'s
+power recovery (\(\pm\)1.01 percentage points, this table's widest cell).
+Three adjacent pairs are close enough that their rank order should be
+read as directional rather than confirmed, each roughly one combined
+standard error apart: `sydni_graphical` and `sydni_brm` on Type I error
+(0.143 vs.\ 0.148) and on power recovery (0.053 vs.\ 0.059); and
+`sydni_copula` and `sydni_bart` on Type I error (0.199 vs.\ 0.203).
+`sydni_bart`'s spurious-edge rate is the one large, unambiguous outlier
+in this table - roughly 8-19x every other engine's rate, including
+`sydni_brm`'s, and resolved well outside any of these margins - and is
+discussed further below.
 
 The runtime column changes the interpretation of this table substantially.
 `sydni_brm` is never worst on any of the three axes above (2nd, 3rd, 2nd)
@@ -1036,11 +1055,13 @@ Because `engine_factor()` was evaluated against a discretized version of
 its numbers are not placed in the ranked table, the speedup table, or
 any "Nth of five" comparison - doing so would imply a like-for-like
 comparison that the design of this benchmark does not support. On the
-same matched grid used above, `sydni_factor`'s own numbers are: Type I
-error 0.129, power recovery 0.062, spurious-edge rate 0.0006, at 1.28
-seconds per condition; on the full (non-matched) grid, its false
-augmentation-only significance rate - the intended-use safety metric
-discussed above - is 0.087. Within its own ordinal-outcome frame, these numbers
+same matched grid used above, `sydni_factor`'s own numbers (95% MCI
+half-width in parentheses; see `study1_confirmation_mcse.csv`) are: Type
+I error 0.129 (\(\pm\)0.005), power recovery 0.062 (\(\pm\)0.007),
+spurious-edge rate 0.0006 (\(\pm\)0.0002), at 1.28 seconds per condition;
+on the full (non-matched) grid, its false augmentation-only significance
+rate - the intended-use safety metric discussed above - is 0.087
+(\(\pm\)0.002). Within its own ordinal-outcome frame, these numbers
 are directionally favorable - lower Type I error and a lower spurious-edge
 rate than any of the four continuous-outcome engines above, at a runtime
 in the same broad cheap-engine range (fractions of a second to a few
@@ -1271,15 +1292,42 @@ mixed the two grids, which understated `sydni_bart_ma`'s power recovery
 (0.052 vs.\ 0.083 here) and, more importantly, made `sydni_brm_ma` look
 more competitive than the matched comparison supports.
 
-One finding here revises this family's Section 8.6-derived positioning,
-scoped strictly to Scenario 3. First, **`sydni_brm`'s measurement-aware
-path is not the all-arounder its manifest-variable behavior would
-suggest.** Where Section 8.6 found `sydni_brm` never worst on any axis,
-here it finishes last by mean rank and is worst on four of the six axes -
-Type I error, power recovery, between-construct sign-reversal rate, and
-runtime (the last at roughly 470-1,600x the compute of the other four
-engines) - while sitting mid-pack on false discovery rate (4th) and
-within-scale correlation error (3rd). This is a broader weakness than the
+**Precision caveat: only 4 design cells support this table.** Unlike
+Section 8.6's 20-cell matched grid, this scenario's grid is
+\(n_{\mathrm{obs}} \in \{75, 150\} \times n_{\mathrm{syn}}/n_{\mathrm{obs}}
+\in \{1, 2\}\) - 4 design cells - so the design-stratified 95% MCI
+half-width on the rate-based columns (Type I error, FDR, power recovery,
+between-construct sign-reversal) is substantially wider than Section
+8.6's: roughly 1.0-2.6 percentage points depending on engine and metric,
+versus under 0.8pp there (full per-cell detail in
+`results/benchmarks/confirmation/study2_confirmation_mcse.csv`,
+reproduced by `compute_confirmation_mcse.R` in the same directory). At
+that precision, essentially none of the pairwise differences among the
+five engines on Type I error, FDR, or power recovery are resolved outside
+roughly one combined standard error - the mean-rank ordering below on
+those three axes should be read as suggestive, not statistically
+confirmed. Within-scale correlation error and runtime are the exception:
+their half-widths are small relative to the between-engine gaps (e.g.\
+`sydni_bart_ma`'s within-scale error, 0.100 \(\pm\)0.001, is clearly
+separated from every other engine's 0.037-0.063, half-widths
+0.0004-0.0055; `sydni_brm_ma`'s runtime, 361 \(\pm\)14 seconds, is
+separated from every other engine's by orders of magnitude) - those two
+conclusions rest on firmer footing than the rate-based ranking.
+
+Subject to that caveat, one finding here revises this family's Section
+8.6-derived positioning, scoped strictly to Scenario 3. First, by point
+estimate, **`sydni_brm`'s measurement-aware path is not the all-arounder
+its manifest-variable behavior would suggest.** Where Section 8.6 found
+`sydni_brm` never worst on any axis, here it finishes last by mean rank
+and is worst on four of the six axes - Type I error, power recovery,
+between-construct sign-reversal rate, and runtime (the last at roughly
+470-1,600x the compute of the other four engines, resolved well outside
+Monte Carlo noise) - while sitting mid-pack on false discovery rate (4th)
+and within-scale correlation error (3rd, also resolved). Of these,
+runtime and within-scale error are confirmed weaknesses; Type I error,
+power recovery, and between-construct sign-reversal rate are directional
+at this replication count, per the precision caveat above. This is a
+broader weakness than the
 grid-mismatched comparison in an earlier draft suggested (that version
 reported `sydni_brm_ma` worst on only two of six axes and second-best on
 power recovery); on the matched grid it is worst on power recovery too.
@@ -1287,9 +1335,9 @@ Notably, the smaller 10-replication pilot's original characterization -
 worst or tied-worst on four of six axes - turns out to be closer to this
 matched-grid picture than the grid-mismatched full comparison was. This
 does not touch Section 8.6's manifest-variable conclusion about
-`sydni_brm`; it is confined to the measurement-aware use case. Second,
-**`sydni_bart`'s niche narrows for this scenario without being
-eliminated.** It still posts the best power recovery (0.083) and the best
+`sydni_brm`; it is confined to the measurement-aware use case. Second, by
+point estimate, **`sydni_bart`'s niche narrows for this scenario without
+being eliminated.** It still posts the best power recovery (0.083) and the best
 between-construct sign-reversal rate (0.029) of the five, but its
 within-scale correlation error (0.100) is roughly 1.6-2.7x every other
 `ma` engine's (0.037-0.063) - the one engine whose measurement-aware path
@@ -1300,8 +1348,8 @@ measurement-aware use it is better read as a specialist for when power or
 between-construct fidelity matters more than item-level reliability, not
 as a default. `sydni_factor_ma` and `sydni_graphical_ma` remain the
 recommended defaults for this scenario, though on the matched grid they
-are no longer tied and neither leads on every axis: `sydni_factor_ma`
-posts the best mean rank overall (2.00) and is best or tied-best on Type
+are no longer tied and neither leads on every axis: by point estimate,
+`sydni_factor_ma` posts the best mean rank overall (2.00) and is best or tied-best on Type
 I error, false discovery rate, and within-scale correlation error, at the
 cost of the weakest power recovery among the four non-`sydni_brm` engines
 (4th of 5 overall). `sydni_graphical_ma` (mean rank 2.17) is faster still
