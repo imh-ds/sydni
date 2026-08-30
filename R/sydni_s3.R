@@ -21,7 +21,7 @@ print.sydni <- function(x, ...) {
   }
   cat("  Retention: ", details$retention_mode, "\n", sep = "")
   cat("  Measurement blocks: ", details$measurement_blocks_source, "\n", sep = "")
-  cat("  Between-block shrinkage: ", details$between_block_shrink, "\n", sep = "")
+  cat("  Between-block shrinkage: ", sydni_display_value(details$between_block_shrink), "\n", sep = "")
   invisible(x)
 }
 
@@ -79,7 +79,7 @@ print.summary.sydni <- function(x, ...) {
   }
   cat("  Retention mode: ", x$retention_mode, "\n", sep = "")
   cat("  Measurement blocks: ", x$measurement_blocks_source, "\n", sep = "")
-  cat("  Between-block shrinkage: ", x$between_block_shrink, "\n", sep = "")
+  cat("  Between-block shrinkage: ", sydni_display_value(x$between_block_shrink), "\n", sep = "")
   cat("Reproducibility settings\n")
   cat("  Seed: ", x$seed, "\n", sep = "")
   cat("  Noise method: ", x$noise_method, "\n", sep = "")
@@ -246,4 +246,11 @@ plot_sydni_correlation_heatmap <- function(correlation, title) {
   graphics::axis(1, at = seq_len(n_variables), labels = colnames(correlation), las = 2)
   graphics::axis(2, at = seq_len(n_variables), labels = rev(colnames(correlation)), las = 2)
   graphics::box()
+}
+
+sydni_display_value <- function(value, none = "none") {
+  if (is.null(value) || length(value) == 0 || all(is.na(value))) {
+    return(none)
+  }
+  paste(value, collapse = ", ")
 }
