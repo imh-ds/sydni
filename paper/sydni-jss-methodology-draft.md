@@ -25,7 +25,7 @@ This article describes the workflow, software interface, validation and
 reporting protocol, and pilot validation studies. A single psychometric-data
 example illustrates the workflow; it is not treated as confirmatory evidence.
 
-**Keywords:** synthetic data, robustness analysis, sensitivity analysis,
+**Keywords:** synthetic data, sensitivity analysis, perturbation analysis,
 Bayesian regression, copula, BART, factor analysis, graphical models,
 measurement invariance, R.
 
@@ -40,7 +40,7 @@ substantive conclusion remains stable under plausible perturbations of the
 observed sample.
 
 SYDNI addresses this narrower problem. The method generates synthetic
-extensions of an observed dataset for use as secondary robustness checks. The
+extensions of an observed dataset for use as secondary sensitivity checks. The
 synthetic rows are deliberately not treated as new empirical evidence. Instead,
 they are used to stress-test whether a downstream conclusion changes when the
 observed data are resampled, perturbed, regularized, and passed through a
@@ -58,10 +58,9 @@ the stability of an observational estimand (Chawla et al., 2002; He et al.,
 2008). These methods can be informative boundary comparisons, but they are not
 interchangeable inferential tools.
 
-The following table positions SYDNI against the closest adjacent tools. We are not aware
-of an open-source R package whose primary purpose is synthetic augmentation as
-a non-confirmatory sensitivity workflow. The absence of a direct comparator
-does not make adjacent methods irrelevant: they are useful baselines for
+The following table positions SYDNI against the closest adjacent tools. SYDNI
+is designed specifically for synthetic augmentation as a non-confirmatory
+sensitivity workflow. Adjacent methods remain informative baselines for
 showing how tools designed for a different task behave when analysts use them
 for augmentation.
 
@@ -101,7 +100,7 @@ structure. This positioning leads to three design principles:
    in the aspects relevant to the planned analysis.
 2. **Conservative perturbation.** Synthetic generation should not mechanically
    create stronger evidence by increasing row count.
-3. **Robustness interpretation.** Augmented analyses should be reported as
+3. **Sensitivity interpretation.** Augmented analyses should be reported as
    secondary sensitivity analyses, not as replacements for original-sample
    analyses.
 
@@ -643,7 +642,7 @@ balanced_out <- sydni(
 
 ## 7. Validation and reporting
 
-SYDNI output should be validated before being used in a downstream robustness
+SYDNI output should be validated before being used in a downstream sensitivity
 analysis. At minimum, analysts should compare:
 
 - marginal distributions of synthesized variables;
@@ -674,7 +673,7 @@ tolerance is implied: it depends on the estimand and scientific context.
 
 Recommended reporting language:
 
-> SYDNI analyses were treated as secondary robustness checks alongside the
+> SYDNI analyses were treated as secondary sensitivity checks alongside the
 > original-sample analyses. Synthetic augmentation was not interpreted as
 > additional empirical evidence. We predeclared the sensitivity set and effect
 > tolerance, reported the original analysis first, and treated augmentation-only
@@ -1235,12 +1234,14 @@ variant's Type I error and false discovery rate (0.188-0.248 /
 observed-only baseline (0.051 / 0.032) as the smaller pilot suggested -
 `ma`'s Type I error runs roughly 1.2-1.6x the baseline's rather than
 nearly matching it. The practical implication is unchanged:
-`measurement_blocks` is worth supplying whenever indicator-level data
-exists, even when the end goal is only a composite-score regression -
-skipping it costs real inferential safety on every engine tested, at a
-runtime premium that stays under a quarter-second per condition for
-`sydni_copula`, `sydni_graphical`, and `sydni_bart`, but rises to roughly
-21x for `sydni_brm` (17.5 to 361.8 seconds).
+When analysts have a defensible, pre-specified item-to-construct mapping and
+preservation of that measurement structure is relevant, supplying
+`measurement_blocks` is supported by this design even when the end goal is
+only a composite-score regression. Within that setting, omitting it costs
+inferential safety on every engine tested, at a runtime premium that stays
+under a quarter-second per condition for `sydni_copula`, `sydni_graphical`,
+and `sydni_bart`, but rises to roughly 21x for `sydni_brm` (17.5 to 361.8
+seconds).
 
 ![Figure 4: Flat vs. measurement-aware, paired by engine, across n_obs.](figures/figure4_flat_vs_ma.png)
 
@@ -1349,12 +1350,13 @@ within-scale correlation error (0.100) is roughly 1.6-2.7x every other
 `ma` engine's (0.037-0.063) - the one engine whose measurement-aware path
 does not clearly protect the within-construct reliability the mechanism
 is specifically designed to protect. Consistent with Section 8.6's own
-finding that `sydni_bart` is not recommended as a default choice, for
+finding that `sydni_bart` is not a general first-choice engine, for
 measurement-aware use it is better read as a specialist for when power or
 between-construct fidelity matters more than item-level reliability, not
-as a default. `sydni_factor_ma` and `sydni_graphical_ma` remain the
-recommended defaults for this scenario, though on the matched grid they
-are no longer tied and neither leads on every axis: by point estimate,
+as a general choice. In this benchmark, `sydni_factor_ma` and
+`sydni_graphical_ma` are reasonable candidate engines for this scenario,
+though on the matched grid they are no longer tied and neither leads on every
+axis: by point estimate,
 `sydni_factor_ma` posts the best mean rank overall (2.00) and is best or tied-best on Type
 I error, false discovery rate, and within-scale correlation error, at the
 cost of the weakest power recovery among the four non-`sydni_brm` engines
@@ -1362,9 +1364,9 @@ cost of the weakest power recovery among the four non-`sydni_brm` engines
 (0.22 vs.\ 0.52 seconds per condition) and recovers more power (2nd of 5),
 at the cost of the weakest between-construct sign-reversal rate among the
 four non-`sydni_brm` engines (4th of 5 overall). The choice between them
-is a safety-leaning default (`sydni_factor_ma`) versus a faster,
-power-leaning one (`sydni_graphical_ma`), not a clear dominance of one
-over the other.
+is between a safety-leaning candidate (`sydni_factor_ma`) and a faster,
+power-leaning candidate (`sydni_graphical_ma`), not a clear dominance of
+one over the other.
 
 Combining all three scenarios gives a scenario-dependent recommendation
 rather than one global engine ranking:
@@ -1372,11 +1374,11 @@ rather than one global engine ranking:
 \begin{center}
 \begin{tabular}{p{4.2cm}p{5.3cm}p{2.8cm}}
 \hline
-User need & Recommended engine(s) & Evidence source \\
+User need & Benchmark-informed candidates and cautions & Evidence source \\
 \hline
-Manifest/composite predictors, no indicator data & \texttt{sydni\_brm} (reference); \texttt{sydni\_graphical} (strongest cheap all-arounder); \texttt{sydni\_copula} (power-recovery leader); \texttt{sydni\_bart} (power specialist, not a default); \texttt{sydni\_factor} (ordinal outcomes only - not cross-engine comparable) & Section 8.6 \\
-Indicator-level data, composite-score output only & Supply \texttt{measurement\_blocks} regardless of engine & Section 8.7 (flat vs.\ ma) \\
-Indicator-level data, item-level/SEM output needed & \texttt{sydni\_factor\_ma}/\texttt{sydni\_graphical\_ma} (defaults); \texttt{sydni\_bart\_ma} (power/between-construct specialist); \texttt{sydni\_brm\_ma} (viable but expensive, no demonstrated payoff) & Section 8.7 (ma arm) \\
+Manifest/composite predictors, no indicator data & \texttt{sydni\_brm} (reference); \texttt{sydni\_graphical} (strong cheap candidate); \texttt{sydni\_copula} (power-recovery candidate); \texttt{sydni\_bart} (power specialist, not a general choice); \texttt{sydni\_factor} (ordinal outcomes only - not cross-engine comparable) & Section 8.6 \\
+Indicator-level data, composite-score output only & Supply \texttt{measurement\_blocks} when a defensible, pre-specified item-to-construct mapping is available and measurement structure is relevant & Section 8.7 (flat vs.\ ma) \\
+Indicator-level data, item-level/SEM output needed & \texttt{sydni\_factor\_ma}/\texttt{sydni\_graphical\_ma} (benchmark-specific candidates); \texttt{sydni\_bart\_ma} (power/between-construct specialist); \texttt{sydni\_brm\_ma} (viable but expensive, no demonstrated payoff) & Section 8.7 (ma arm) \\
 \hline
 \end{tabular}
 \end{center}
@@ -1558,7 +1560,7 @@ SYDNI has several important limitations:
     `balance_target = "largest_group"`.
 
 These limitations are consistent with the intended use of SYDNI as a
-robustness workflow, not a universal synthetic-data generator.
+sensitivity-analysis workflow, not a universal synthetic-data generator.
 
 ## 12. Discussion
 
@@ -1571,7 +1573,7 @@ pre-specify a defensible set of engines, settings, and seeds; compare direction,
 effect magnitude, uncertainty, and substantive decisions across those runs; and
 treat synthetic-only findings as exploratory signals rather than confirmation.
 
-The five-engine design allows analysts to ask different robustness questions.
+The five-engine design allows analysts to ask different sensitivity questions.
 If a conclusion is stable under BRM and BART, it may be less sensitive to
 linear versus nonlinear conditional modeling choices - though Section 8.6's
 direct test of this premise found no measurable empirical difference between
@@ -1590,11 +1592,11 @@ ranking of engines. Both are now confirmed at substantially higher
 replication than their originating pilots (100 per condition for every
 method except `sydni_brm`/`sydni_brm_flat`/`sydni_brm_ma`, 50 on a
 predeclared focused grid for those, in each study). The manifest-variable
-study found a robust separation from off-label resampling comparators and
+study found a clear separation from off-label resampling comparators and
 did not detect a BART advantage in its nonlinear design. The
 measurement-aware study evaluated the calibration mechanism under one
-item-battery design and found `measurement_blocks` worth supplying
-whenever indicator-level data exists. Together, these results inform
+item-battery design and supported supplying `measurement_blocks` when a
+defensible item-to-construct mapping is available. Together, these results inform
 engine-specific cautions and motivate further testing; they do not
 establish a universal winner or a formal inferential guarantee.
 
