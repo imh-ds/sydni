@@ -1,7 +1,7 @@
 name: Validation study launcher
 
 # The study code is an untracked, checksummed repository-variable run payload.
-# Execution nonce: development-pilot-01
+# Execution nonce: focused-train-01
 on:
   push:
     branches: [codex/validation-feasibility]
@@ -42,8 +42,8 @@ jobs:
         run: |
           python - <<'PY'
           import base64, hashlib, io, json, os, pathlib, tarfile
-          if os.environ['PROFILE'] not in ('smoke', 'feasibility', 'development_pilot'):
-              raise SystemExit('Only smoke, feasibility and development pilot are authorized')
+          if os.environ['PROFILE'] not in ('smoke', 'feasibility', 'development_pilot', 'focused_train'):
+              raise SystemExit('Only smoke, feasibility, development pilot and focused training are authorized')
           payload = base64.b64decode(os.environ['RESEARCH_PAYLOAD'].strip(), validate=True)
           digest = hashlib.sha256(payload).hexdigest()
           if digest != os.environ['RESEARCH_SHA256'] or len(payload) > 36000:

@@ -444,7 +444,7 @@ engine_copula <- function(
   )
 
   noisy_data <- if (nrow(sampled_data) > 0) {
-    add_noise(
+    with_seed(seed + length(groups) + 5000L, add_noise(
       data = sampled_data,
       variables = dplyr::all_of(variables),
       method = noise_method,
@@ -453,7 +453,7 @@ engine_copula <- function(
       r = r,
       round_int = round_int,
       bounds = noise_bounds
-    )
+    ))
   } else {
     sampled_data
   }

@@ -252,3 +252,22 @@ test_that("measurement-aware copula accepts hierarchical and covariate-only comp
   expect_true(all(out$data$mom %in% df$mom))
   expect_true(all(out$data$dad %in% df$dad))
 })
+
+test_that("copula seed controls feeder noise without changing caller RNG", {
+  set.seed(18)
+  df <- data.frame(x = rnorm(100), y = rnorm(100))
+  run <- function(ambient, seed) {
+    set.seed(ambient)
+    before <- .Random.seed
+    out <- engine_copula(data = df, variables = c("x", "y"), n_aug = 50,
+                         noise_method = "gaussian", c = 0.3, seed = seed)
+    list(data = out$data, before = before, after = .Random.seed)
+  }
+  a <- run(101, 42)
+  b <- run(202, 42)
+  different <- run(101, 43)
+  expect_equal(a$data, b$data)
+  expect_identical(a$before, a$after)
+  expect_identical(b$before, b$after)
+  expect_false(identical(a$data, different$data))
+})
