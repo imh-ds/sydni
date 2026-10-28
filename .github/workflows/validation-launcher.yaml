@@ -1,7 +1,7 @@
 name: Validation feasibility launcher
 
 # The study code is an untracked, checksummed repository-variable run payload.
-# Execution nonce: smoke-01
+# Execution nonce: feasibility-01
 on:
   push:
     branches: [codex/validation-feasibility]
@@ -82,6 +82,7 @@ jobs:
           mkdir -p validation/library
           R CMD INSTALL --no-multiarch --with-keep.source . -l validation/library
           Rscript validation/scripts/test.R
+          Rscript validation/scripts/package_tests.R
 
       - name: Run the bounded study shard
         shell: bash
