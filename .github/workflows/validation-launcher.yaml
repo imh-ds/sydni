@@ -1,0 +1,106 @@
+name: Validation feasibility launcher
+
+# The study code is an untracked, checksummed repository-variable run payload.
+# Execution nonce: smoke-01
+on:
+  push:
+    branches: [codex/validation-feasibility]
+    paths: [.github/workflows/validation-launcher.yaml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sydni-validation-feasibility
+  cancel-in-progress: false
+
+jobs:
+  validation:
+    name: Study shard ${{ matrix.study }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: ${{ vars.SYDNI_VALIDATION_PROFILE == 'smoke' && 20 || 40 }}
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        study: ${{ fromJSON(vars.SYDNI_VALIDATION_PROFILE == 'smoke' && '[0]' || '[1,2,3]') }}
+    env:
+      OMP_NUM_THREADS: '1'
+      OPENBLAS_NUM_THREADS: '1'
+      MKL_NUM_THREADS: '1'
+      RESEARCH_PAYLOAD: ${{ vars.SYDNI_VALIDATION_PAYLOAD }}
+      RESEARCH_SHA256: ${{ vars.SYDNI_VALIDATION_SHA256 }}
+      PROFILE: ${{ vars.SYDNI_VALIDATION_PROFILE }}
+      R_LIBS_USER: ${{ github.workspace }}/validation/library
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Verify and unpack the allowlisted research payload
+        shell: bash
+        run: |
+          python - <<'PY'
+          import base64, hashlib, io, json, os, pathlib, tarfile
+          if os.environ['PROFILE'] not in ('smoke', 'feasibility'):
+              raise SystemExit('Only smoke and feasibility are authorized')
+          payload = base64.b64decode(os.environ['RESEARCH_PAYLOAD'].strip(), validate=True)
+          digest = hashlib.sha256(payload).hexdigest()
+          if digest != os.environ['RESEARCH_SHA256'] or len(payload) > 36000:
+              raise SystemExit('Research payload checksum/size mismatch')
+          with tarfile.open(fileobj=io.BytesIO(payload), mode='r:gz') as archive:
+              if len(archive.getmembers()) > 100 or sum(m.size for m in archive.getmembers()) > 2_000_000:
+                  raise SystemExit('Expanded payload exceeds the research-code cap')
+              for member in archive.getmembers():
+                  path = pathlib.PurePosixPath(member.name)
+                  if (not member.isfile() or path.is_absolute() or '..' in path.parts
+                          or not path.parts or path.parts[0] != 'validation'):
+                      raise SystemExit('Unsafe research payload path')
+              archive.extractall('.', filter='data')
+          manifest = json.loads(pathlib.Path('validation/PAYLOAD-MANIFEST.json').read_text())
+          for path, expected in manifest.items():
+              if hashlib.sha256(pathlib.Path(path).read_bytes()).hexdigest() != expected:
+                  raise SystemExit('Research file hash mismatch')
+          pathlib.Path('validation/RECEIVED-SHA256.txt').write_text(digest)
+          print('Verified payload', digest, 'files', len(manifest))
+          PY
+
+      - uses: r-lib/actions/setup-r@f9a764fea8d5c63df6ef9a5c7795bf7deb5d7e05 # v2
+        with:
+          r-version: '4.6.0'
+          use-public-rspm: true
+
+      - uses: r-lib/actions/setup-r-dependencies@f9a764fea8d5c63df6ef9a5c7795bf7deb5d7e05 # v2
+        with:
+          dependencies: '"hard"'
+          extra-packages: any::testthat, any::jsonlite, any::digest, any::dbarts, any::psych, any::huge
+          needs: validation
+
+      - name: Install this checkout and test the research contracts
+        shell: bash
+        run: |
+          mkdir -p validation/library
+          R CMD INSTALL --no-multiarch --with-keep.source . -l validation/library
+          Rscript validation/scripts/test.R
+
+      - name: Run the bounded study shard
+        shell: bash
+        env:
+          STUDY: ${{ matrix.study }}
+        run: |
+          Rscript validation/scripts/run.R "$PROFILE" "validation/runs/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-study-${STUDY}" "$STUDY" 20
+
+      - name: Preserve scientific records, failures, and executed source
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: validation-${{ github.run_id }}-${{ github.run_attempt }}-study-${{ matrix.study }}
+          path: |
+            validation/runs/
+            validation/R/
+            validation/scripts/
+            validation/tests/
+            validation/PAYLOAD-MANIFEST.json
+            validation/RECEIVED-SHA256.txt
+          retention-days: 90
+          if-no-files-found: error
