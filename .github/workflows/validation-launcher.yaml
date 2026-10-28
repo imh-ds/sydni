@@ -1,7 +1,7 @@
-name: Validation feasibility launcher
+name: Validation study launcher
 
 # The study code is an untracked, checksummed repository-variable run payload.
-# Execution nonce: feasibility-01
+# Execution nonce: development-pilot-01
 on:
   push:
     branches: [codex/validation-feasibility]
@@ -42,8 +42,8 @@ jobs:
         run: |
           python - <<'PY'
           import base64, hashlib, io, json, os, pathlib, tarfile
-          if os.environ['PROFILE'] not in ('smoke', 'feasibility'):
-              raise SystemExit('Only smoke and feasibility are authorized')
+          if os.environ['PROFILE'] not in ('smoke', 'feasibility', 'development_pilot'):
+              raise SystemExit('Only smoke, feasibility and development pilot are authorized')
           payload = base64.b64decode(os.environ['RESEARCH_PAYLOAD'].strip(), validate=True)
           digest = hashlib.sha256(payload).hexdigest()
           if digest != os.environ['RESEARCH_SHA256'] or len(payload) > 36000:
@@ -73,7 +73,7 @@ jobs:
       - uses: r-lib/actions/setup-r-dependencies@f9a764fea8d5c63df6ef9a5c7795bf7deb5d7e05 # v2
         with:
           dependencies: '"hard"'
-          extra-packages: any::testthat, any::jsonlite, any::digest, any::dbarts, any::psych, any::huge
+          extra-packages: any::testthat, any::jsonlite, any::digest, any::dbarts, any::psych, any::huge, any::processx
           needs: validation
 
       - name: Install this checkout and test the research contracts
@@ -89,7 +89,7 @@ jobs:
         env:
           STUDY: ${{ matrix.study }}
         run: |
-          Rscript validation/scripts/run.R "$PROFILE" "validation/runs/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-study-${STUDY}" "$STUDY" 20
+          Rscript validation/scripts/run.R "$PROFILE" "validation/runs/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-study-${STUDY}" "$STUDY" 30
 
       - name: Preserve scientific records, failures, and executed source
         if: always()
