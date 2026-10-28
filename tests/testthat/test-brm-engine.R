@@ -1,18 +1,17 @@
 test_that("brm engine fails fast when brms is unavailable", {
-  testthat::local_mocked_bindings(
-    requireNamespace = function(package, quietly = FALSE) {
-      if (identical(package, "brms")) {
-        return(FALSE)
-      }
-      base::requireNamespace(package, quietly = quietly)
-    },
-    .package = "sydni"
-  )
+  isolated_engine <- engine_brm
+  isolated_env <- new.env(parent = environment(engine_brm))
+  isolated_env$requireNamespace <- function(package, quietly = FALSE) {
+    if (identical(package, "brms")) return(FALSE)
+    base::requireNamespace(package, quietly = quietly)
+  }
+  environment(isolated_engine) <- isolated_env
+  testthat::local_mocked_bindings(engine_brm = isolated_engine, .package = "sydni")
 
   df <- data.frame(x = 1:5, y = 6:10)
 
   expect_error(
-    engine_brm(
+    isolated_engine(
       data = df,
       variables = c("x", "y"),
       n_aug = 3
