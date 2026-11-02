@@ -35,3 +35,5 @@
 ^\.worktrees$
 ^\.\.Rcheck$
 ^docs$
+^LICENSE$
+^CITATION\.cff$
