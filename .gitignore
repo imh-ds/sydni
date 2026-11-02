@@ -48,12 +48,6 @@ po/*~
 # RStudio Connect folder
 rsconnect/
 
-# Work In Progress folder
-WIP/
-
-# Legacy Functions folder
-Legacy/
-
 # Local development package library
 local_r_lib/
 
@@ -63,11 +57,9 @@ local_r_lib/
 stan_cache/
 
 # Development experiments, manuscripts, and benchmark outputs
-.worktrees/
 tests/3_Experiments/
 tests/internal/
 inst/benchmarks/
-paper/
 results/
 TECHNICAL_METHODS.md
 vignettes/

@@ -23,3 +23,15 @@
 ^results$
 ^TECHNICAL_METHODS\.md$
 ^vignettes$
+# Relay and agent files, private folders
+^AGENTS\.md$
+^CLAUDE\.md$
+^outline$
+^_ARCHIVE$
+^wip$
+^validation$
+^\.claude$
+^\.agents$
+^\.superpowers$
+^\.worktrees$
+^\.\.Rcheck$
