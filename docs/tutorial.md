@@ -1,0 +1,125 @@
+# A sydni tutorial: robustness checks with synthetic data
+
+An informal walk-through of `sydni`. The same code ships as the package vignette (`vignettes/sydni_tutorial.Rmd`).
+
+```r
+# install.packages("remotes")
+remotes::install_github("imh-ds/sydni")
+library(sydni)
+```
+
+This tutorial walks through a small robustness check with `sydni`: generate
+synthetic rows from an observed sample, compare them with the observed data,
+and refit a simple analysis on both. It uses the Gaussian copula engine, which
+needs no Stan or other optional packages, and the bundled `grit` data
+(personality items and two covariates). Synthetic augmentation is used here as
+a sensitivity check, not as extra empirical evidence.
+
+## 1. Prepare the observed data
+
+`sydni` expects an analysis dataset without missing values, so keep the
+complete cases first.
+
+``` r
+data(grit, package = "sydni")
+grit_complete <- grit[stats::complete.cases(grit), ]
+nrow(grit_complete)
+#> [1] 442
+
+items <- c(sprintf("o%d", 1:10), sprintf("e%d", 1:10))
+```
+
+## 2. Generate synthetic rows
+
+`variables` are the columns to synthesize, `covariates` define the groups the
+engine conditions on, and `n_aug` is the number of synthetic rows returned.
+
+``` r
+set.seed(123)
+result <- sydni(
+  data = grit_complete,
+  variables = items,
+  covariates = c("gs1", "gs2"),
+  n_aug = 200,
+  engine = "copula",
+  seed = 123
+)
+names(result)
+#> [1] "models" "data"   "meta"
+dim(result$data)
+#> [1] 200  22
+```
+
+The result has the fitted models (`models`), the synthetic data (`data`) and
+lightweight metadata (`meta`) with the generation settings.
+
+``` r
+result$meta$effective_augmentation_ratio
+#> [1] 0.4524887
+result$meta$noise_method
+#> [1] "truncnormal"
+```
+
+## 3. Compare observed and synthetic data
+
+First check the marginal distributions through item means, then the dependence
+structure through the correlation matrix.
+
+``` r
+synthetic <- result$data
+obs_means <- colMeans(grit_complete[, items])
+syn_means <- colMeans(synthetic[, items])
+round(summary(syn_means - obs_means), 3)
+#>    Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+#>  -0.181  -0.084  -0.051  -0.047  -0.006   0.086
+
+cor_obs <- cor(grit_complete[, items])
+cor_syn <- cor(synthetic[, items])
+# mean absolute difference between the two correlation matrices
+mean(abs(cor_obs - cor_syn)[upper.tri(cor_obs)])
+#> [1] 0.1154573
+```
+
+## 4. Refit a downstream analysis
+
+Suppose the analysis of interest relates the mean of the extraversion items to
+the mean of the openness items. Fit it on the observed sample alone, then on
+the observed sample plus the synthetic rows.
+
+``` r
+scale_scores <- function(d) {
+  data.frame(
+    openness = rowMeans(d[, sprintf("o%d", 1:10)]),
+    extraversion = rowMeans(d[, sprintf("e%d", 1:10)])
+  )
+}
+
+fit_obs <- lm(extraversion ~ openness, data = scale_scores(grit_complete))
+fit_aug <- lm(extraversion ~ openness,
+              data = scale_scores(rbind(grit_complete[, items], synthetic[, items])))
+
+rbind(
+  observed = c(coef(fit_obs)["openness"], se = summary(fit_obs)$coefficients[2, 2]),
+  augmented = c(coef(fit_aug)["openness"], se = summary(fit_aug)$coefficients[2, 2])
+)
+#>            openness         se
+#> observed  0.2458290 0.06649243
+#> augmented 0.2104172 0.05485810
+```
+
+Compare the slope first: if it keeps its sign and rough size, the conclusion is
+stable under this perturbation; if it moves a lot, treat the finding as
+fragile and say so. The standard error is not a result to report from the
+augmented fit. The synthetic rows carry no new information about the
+population, so a smaller standard error comes from the added row count, not
+from added evidence. Do not interpret effects that appear only after
+augmentation as additional evidence.
+
+## 5. Where to go next
+
+- Other engines (`"bart"`, `"factor"`, `"graphical"`, `"brm"`) need optional
+  packages; see the README for installation and for when to choose each one.
+- The noise controls (`noise_method`, `p`, `f`, `c`) change how strongly the
+  feeder data are perturbed before synthesis.
+- The `sydni_methodology` vignette describes the recommended validation
+  workflow, and `sydni_technical_methods` gives the technical details.

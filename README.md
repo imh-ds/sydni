@@ -6,6 +6,8 @@ editor_options:
 
 # sydni
 
+New here? Start with the [tutorial](docs/tutorial.md), a short robustness check on the bundled `grit` data.
+
 `sydni` is an R package for **synthetic data augmentation with
 noise-informed shrinkage**. It is designed for **robustness and
 sensitivity checks** in settings where analyses may be affected by small

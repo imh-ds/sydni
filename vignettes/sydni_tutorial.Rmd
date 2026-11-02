@@ -100,9 +100,13 @@ rbind(
 )
 ```
 
-If the slope barely moves, the conclusion is stable under this perturbation.
-If it moves, treat the finding as fragile and say so. Do not interpret effects
-that appear only after augmentation as additional evidence.
+Compare the slope first: if it keeps its sign and rough size, the conclusion is
+stable under this perturbation; if it moves a lot, treat the finding as
+fragile and say so. The standard error is not a result to report from the
+augmented fit. The synthetic rows carry no new information about the
+population, so a smaller standard error comes from the added row count, not
+from added evidence. Do not interpret effects that appear only after
+augmentation as additional evidence.
 
 ## 5. Where to go next
 
