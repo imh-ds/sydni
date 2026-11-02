@@ -54,7 +54,6 @@ local_r_lib/
 stan_cache/
 
 # Development experiments, manuscripts, and benchmark outputs
-tests/3_Experiments/
 tests/internal/
 results/
 TECHNICAL_METHODS.md

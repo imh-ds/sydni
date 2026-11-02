@@ -83,7 +83,7 @@ tidy_lm <- function(fit) {
 # -------------------------------------------------------------------------
 
 exp1_raw <- read.csv(
-  "tests/3_Experiments/Experiment_01/1_Data/cc_data_s2_data.csv",
+  file.path(Sys.getenv("SYDNI_EXPERIMENT_DIR", "_ARCHIVE/tests/3_Experiments"), "Experiment_01/1_Data/cc_data_s2_data.csv"),
   check.names = FALSE
 )
 

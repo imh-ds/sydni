@@ -120,7 +120,7 @@ add_exp2_composites <- function(data) {
 
 prepare_exp1 <- function() {
   data <- read.csv(
-    "tests/3_Experiments/Experiment_01/1_Data/cc_data_s2_data.csv",
+    file.path(Sys.getenv("SYDNI_EXPERIMENT_DIR", "_ARCHIVE/tests/3_Experiments"), "Experiment_01/1_Data/cc_data_s2_data.csv"),
     check.names = FALSE
   )
   data <- data[data$attention == 1 & data$Late == 0 & data$gen != 3, ]
@@ -155,7 +155,7 @@ prepare_exp1 <- function() {
 
 prepare_exp2 <- function() {
   data <- read.csv(
-    "tests/3_Experiments/Experiment_02/1_Data/s2_data.csv",
+    file.path(Sys.getenv("SYDNI_EXPERIMENT_DIR", "_ARCHIVE/tests/3_Experiments"), "Experiment_02/1_Data/s2_data.csv"),
     check.names = FALSE
   )
   drop <- c("conservative", "female", "parent_educ", "ethn")
