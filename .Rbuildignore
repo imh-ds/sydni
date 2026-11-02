@@ -22,7 +22,6 @@
 ^paper$
 ^results$
 ^TECHNICAL_METHODS\.md$
-^vignettes$
 # Relay and agent files, private folders
 ^AGENTS\.md$
 ^CLAUDE\.md$
@@ -35,3 +34,4 @@
 ^\.superpowers$
 ^\.worktrees$
 ^\.\.Rcheck$
+^docs$

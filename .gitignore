@@ -39,9 +39,6 @@ vignettes/*.pdf
 # R Environment Variables
 .Renviron
 
-# pkgdown site
-docs/
-
 # translation temp files
 po/*~
 
@@ -62,4 +59,3 @@ tests/internal/
 inst/benchmarks/
 results/
 TECHNICAL_METHODS.md
-vignettes/

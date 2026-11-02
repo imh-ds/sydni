@@ -1,0 +1,179 @@
+---
+title: "SYDNI methodology and validation workflow"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{SYDNI methodology and validation workflow}
+  %\VignetteEngine{knitr::rmarkdown}
+  \usepackage[utf8]{inputenc}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+```
+
+# Purpose
+
+SYDNI is designed for robustness and sensitivity checks, not for claiming that
+synthetic augmentation recovers population truth. The practical question is:
+
+1. Does a downstream conclusion remain stable under perturbed synthetic data?
+2. Does the synthetic output preserve the aspects of the observed data that
+   matter for the intended analysis?
+
+# Recommended workflow
+
+1. Start from a complete or intentionally imputed analysis dataset.
+2. Generate synthetic data with `sydni()`.
+3. Compare observed and synthetic marginal distributions.
+4. Compare dependence structure, especially within key subgroups.
+5. Refit the downstream analysis on both observed and synthetic data.
+6. Record where results are stable and where they are fragile.
+
+# Choosing an engine
+
+SYDNI now includes five engines, and they are not interchangeable.
+
+Use `engine = "brm"` when:
+
+- you want a general-purpose model-based engine
+- you care about explicit conditional structure
+- you need broader outcome support than the current BART path
+
+Use `engine = "copula"` when:
+
+- your main goal is preserving overall dependence structure
+- subgroup-aware joint synthesis matters more than explicit regression
+  formulas
+
+Use `engine = "bart"` when:
+
+- you suspect important nonlinearities or interactions
+- you want a conditional engine like BRM, but less tied to linear or
+  additive structure
+
+Use `engine = "factor"` when:
+
+- the synthesized variables are item batteries or psychometric measures
+- the scientific target is latent structure rather than only observed
+  correlations
+
+Use `engine = "graphical"` when:
+
+- the scientific target is direct conditional dependence
+- you care about sparse network-like structure among variables
+
+The main unique contributions are:
+
+- `bart` adds nonlinear conditional synthesis beyond BRM
+- `factor` adds latent psychometric structure beyond the observed-data
+  focus of the other engines
+- `graphical` adds sparse direct-dependence structure beyond the dense
+  dependence preserved by the copula engine
+
+# Example
+
+```{r eval = FALSE}
+library(dplyr)
+library(sydni)
+
+data(grit, package = "sydni")
+
+grit_complete <- grit |>
+  filter(if_all(everything(), ~ !is.na(.)))
+
+out <- sydni(
+  data = grit_complete,
+  variables = sprintf("a%01d", seq(10)),
+  covariates = c("gs1", "gs2"),
+  n_aug = 200,
+  engine = "copula",
+  seed = 123
+)
+
+summary(out$data)
+```
+
+# Validation checks
+
+At minimum, evaluate:
+
+- row counts and subgroup proportions
+- marginal distributions for synthesized variables
+- correlations or rank-dependence structure
+- downstream model coefficients or predictions
+- sensitivity to `noise_method`, `p`, `f`, `k`, and `n_aug`
+
+# Interpretation and reporting guidelines
+
+SYDNI should be interpreted as a **secondary robustness framework**. It
+does not turn synthetic rows into additional empirical evidence. Instead,
+it asks whether a conclusion remains stable under cautious,
+structure-preserving extensions of the observed sample.
+
+## Interpretation rules
+
+Use the following rules when reading or reporting SYDNI results:
+
+1. Treat the original-sample analysis as primary.
+2. Treat SYDNI analyses as secondary sensitivity analyses.
+3. If a result appears in both the original and augmented analyses, that
+   is more reassuring than either analysis alone.
+4. If a result is null in the original data but becomes significant only
+   after augmentation, interpret the augmented result as fragile,
+   suggestive, or exploratory rather than confirmatory.
+5. Do not use augmentation-only significance as evidence that an effect
+   existed but was merely hidden in the original sample.
+
+## Reporting recommendations
+
+When SYDNI is used in a manuscript or report:
+
+1. Present the raw-data analysis first.
+2. Present the SYDNI analysis alongside it, not as a replacement.
+3. Report the full SYDNI settings:
+   `engine`, `n_aug`, `noise_method`, `p`/`f`/`c`, `predictor_method`,
+   `predictor_k`, `base_sd`, `k`, `algorithm`, `backend`, and `seed`.
+4. If possible, report whether conclusions are stable across multiple
+   reasonable SYDNI settings.
+5. Describe SYDNI as a robustness or sensitivity procedure, not as a
+   method for increasing evidential sample size.
+
+## Suggested wording
+
+The following wording is appropriate for many use cases:
+
+> SYDNI analyses were treated as secondary robustness checks alongside
+> the original-sample analyses. Synthetic augmentation was not
+> interpreted as additional empirical evidence, and any effects that
+> appeared only after augmentation were interpreted cautiously.
+
+# Known limitations
+
+- Very small subgroup cells can still produce unstable synthetic structure.
+- Ordinal Likert items should be inspected rather than assumed to behave like
+  continuous measurements.
+- Copula synthesis can preserve dependence while still smoothing away important
+  tail behavior.
+- BRM synthesis depends on the model families and predictor structure being
+  reasonable for the data.
+- Factor synthesis is the most sensitive to sparse subgroups when
+  subgroup factor models are fit on small ordinal item sets.
+- Graphical synthesis is best interpreted when direct conditional
+  dependence is substantively meaningful, not merely as a drop-in
+  replacement for copula synthesis.
+
+# Benchmark scaffold
+
+The package includes a starter benchmark scaffold in `inst/benchmarks/` for
+comparing:
+
+- SYDNI BRM
+- SYDNI copula
+- bootstrap-only resampling
+- simple synthetic baselines
+
+Extend that scaffold with domain-specific estimands before making strong
+methodological claims.

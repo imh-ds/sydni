@@ -1,0 +1,1302 @@
+---
+title: "SYDNI: Technical Methods"
+author: "sydni package"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{SYDNI: Technical Methods}
+  %\VignetteEngine{knitr::rmarkdown}
+  \usepackage[utf8]{inputenc}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>",
+  eval = FALSE
+)
+```
+
+# Abstract
+
+Synthetic Data Augmentation with Noise-Informed Shrinkage (SYDNI) is a
+conservative framework for generating structure-preserving synthetic
+extensions of an observed dataset. The framework is designed for
+robustness and sensitivity analyses rather than for replacing empirical
+data collection or treating synthetic rows as confirmatory evidence.
+SYDNI combines bootstrap-based feeder construction, controlled noise
+injection, and engine-specific synthesis using conditional Bayesian
+regression models, subgroup-aware Gaussian copulas, nonlinear BART,
+latent-factor synthesis, and sparse graphical synthesis. This vignette
+documents the current
+implementation in technical detail, including notation, formulas,
+algorithmic steps, argument semantics, and interpretation guidelines.
+
+# 1. Purpose and positioning
+
+SYDNI is intended to answer a constrained methodological question:
+
+1. If the observed sample were extended in a cautious,
+   structure-preserving way, would an analytic conclusion appear stable?
+2. If a more complex analytic workflow is sensitive to sample
+   idiosyncrasies, does that fragility become visible under conservative
+   synthetic perturbation?
+
+The framework is not intended to:
+
+- replace new data collection when real sampling is feasible
+- treat synthetic augmentation as additional empirical evidence
+- guarantee privacy or disclosure protection
+- use augmentation-only significance as confirmation of an otherwise
+  absent effect
+
+The design target is therefore not naive sample-size expansion, but
+regularized synthetic perturbation for robustness analysis.
+
+# 1.1 Engine roles
+
+The five engines serve different methodological roles rather than simply
+offering multiple software implementations of the same idea.
+
+- `brm` is the baseline conditional-model engine. It is the most direct
+  choice when explicit modeled relationships and broad outcome support
+  are the priority.
+- `copula` is the baseline dependence-preservation engine. It is the
+  natural choice when dense joint structure matters more than
+  target-wise conditional models.
+- `bart` is the nonlinear conditional engine. Its distinctive
+  contribution is conditional flexibility beyond linear or additive BRM
+  structure.
+- `factor` is the latent psychometric engine. Its distinctive
+  contribution is explicit latent-structure synthesis for item
+  batteries.
+- `graphical` is the sparse direct-dependence engine. Its distinctive
+  contribution is explicit emphasis on conditional dependence and
+  network-style sparsity.
+
+These distinctions imply the following comparisons:
+
+- choose `brm` vs `bart` when the main question is linear/additive vs
+  nonlinear conditional structure
+- choose `copula` vs `graphical` when the main question is dense joint
+  dependence vs sparse direct dependence
+- choose `factor` when the main question is latent measurement
+  structure rather than only observed-variable association
+
+# 2. Notation
+
+Let the observed dataset be
+
+\begin{equation}
+D = \{x_i\}_{i=1}^{n_{\mathrm{obs}}}
+\end{equation}
+
+with:
+
+- \(n_{\mathrm{obs}}\): observed sample size
+- \(V = \{v_1, \dots, v_p\}\): synthesized variables
+- \(C = \{c_1, \dots, c_q\}\): optional covariates
+- \(n_{\mathrm{aug}}\): target synthetic sample size
+- \(D^\star\): synthetic dataset returned by SYDNI
+
+At the top level, the package constructs a noisy feeder dataset and
+passes it to one of five synthesis engines:
+
+- `engine = "brm"`: conditional Bayesian regression synthesis
+- `engine = "copula"`: subgroup-aware Gaussian copula synthesis with
+  empirical marginal reconstruction
+- `engine = "bart"`: nonlinear conditional synthesis with regularized
+  Bayesian additive regression trees
+- `engine = "factor"`: subgroup-aware latent-factor synthesis for
+  psychometric item batteries
+- `engine = "graphical"`: subgroup-aware sparse Gaussian graphical
+  synthesis
+
+# 3. Top-level workflow
+
+The user-facing entry point is:
+
+```{r}
+result <- sydni(...)
+```
+
+which returns:
+
+```{r}
+list(
+  models = ...,
+  data = synthetic_data,
+  meta = metadata
+)
+```
+
+The current implementation proceeds through the following steps.
+
+## 3.1 Column resolution
+
+If `variables = NULL`, the synthesized variable set is defined as:
+
+\begin{equation}
+V = \mathrm{names}(D) \setminus C
+\end{equation}
+
+Validation checks include:
+
+- `data` must be a data frame
+- `variables` and `covariates` must exist in `data`
+- `variables` and `covariates` must not overlap
+- synthesized columns must have supported types
+- synthesized columns must contain at least two distinct non-missing
+  values
+
+Supported synthesized column types are:
+
+- numeric
+- integer
+- factor
+- ordered factor
+
+## 3.2 Synthetic sample size
+
+The user can specify either:
+
+- `n_aug`: direct synthetic sample size
+- `prop_aug`: proportion of the observed sample size
+
+If `prop_aug` is supplied, the synthetic sample size is:
+
+\begin{equation}
+n_{\mathrm{aug}} =
+\mathrm{round}(n_{\mathrm{obs}} \cdot \mathrm{prop\_aug})
+\end{equation}
+
+If `replace = FALSE` but \(n_{\mathrm{aug}} > n_{\mathrm{obs}}\), the
+current implementation forces `replace = TRUE`.
+
+## 3.3 Metadata capture
+
+The final object stores lightweight metadata:
+
+- resolved variable selections
+- engine and tuning settings
+- seed and backend information
+- an input summary
+
+The full original dataset is not stored in `meta`.
+
+# 4. Noise injection
+
+Noise injection is central to SYDNI. It is intended to make synthetic
+augmentation conservative by reducing dependence on sample-specific
+idiosyncrasies and by preventing trivial copying of the observed rows.
+
+Noise is applied by `inject_noise()` and `add_noise()`.
+
+## 4.1 Integer-like detection
+
+A variable is treated as integer-like if any of the following hold:
+
+- it is stored as integer
+- it is a factor or ordered factor
+- it is numeric but all non-missing values are effectively whole numbers
+
+## 4.2 Bounds and reconstruction
+
+After perturbation, values are clamped either to:
+
+- the observed range of the variable, or
+- `noise_bounds = c(lower, upper)` if supplied
+
+If the variable is integer-like and `round_int = TRUE`, the current
+implementation rounds and reconstructs the output to a compatible
+integer or factor representation.
+
+## 4.3 Noise modes
+
+### 4.3.1 Discrete noise
+
+For integer-like variables:
+
+\begin{equation}
+\varepsilon \in \{-1, 0, +1\}
+\end{equation}
+
+with:
+
+\begin{equation}
+P(\varepsilon = -1) = \frac{c}{2}, \quad
+P(\varepsilon = 0) = 1 - c, \quad
+P(\varepsilon = +1) = \frac{c}{2}
+\end{equation}
+
+For continuous variables:
+
+\begin{equation}
+\varepsilon \sim \mathrm{Uniform}(-c s_x,\; c s_x)
+\end{equation}
+
+where \(s_x = \mathrm{sd}(x)\).
+
+When `c = "auto"` in discrete mode:
+
+\begin{equation}
+c = p
+\end{equation}
+
+Thus `p` directly controls the probability of a non-zero perturbation.
+
+### 4.3.2 Gaussian noise
+
+\begin{equation}
+\varepsilon \sim \mathcal{N}(0,\; (c s_x)^2)
+\end{equation}
+
+When `c = "auto"`:
+
+\begin{equation}
+c = \sqrt{f}
+\end{equation}
+
+which implies approximately:
+
+\begin{equation}
+\mathrm{Var}(\varepsilon) \approx f \cdot \mathrm{Var}(x)
+\end{equation}
+
+### 4.3.3 Truncated Gaussian noise
+
+\begin{equation}
+\varepsilon \sim \mathrm{TruncNormal}
+\left(
+0,\; (c s_x)^2,\; [-c s_x,\; c s_x]
+\right)
+\end{equation}
+
+Again, when `c = "auto"`:
+
+\begin{equation}
+c = \sqrt{f}
+\end{equation}
+
+### 4.3.4 Random noise
+
+\begin{equation}
+\varepsilon \sim \mathrm{Uniform}(-r,\; r)
+\end{equation}
+
+This mode does not scale perturbation magnitude to the variable standard
+deviation.
+
+## 4.4 Post-noise update
+
+After perturbation:
+
+\begin{equation}
+x_{\mathrm{new}} = \mathrm{clip}(x + \varepsilon)
+\end{equation}
+
+where `clip()` denotes range restriction to the observed or
+user-specified bounds.
+
+# 5. BRM engine
+
+## 5.1 Rationale
+
+The BRM engine generates synthetic data by fitting one conditional
+Bayesian model per synthesized variable. In the current implementation,
+each model is fit on a bootstrap-resampled, noise-injected feeder
+dataset rather than on the untouched observed data.
+
+This engine is appropriate when:
+
+- conditional structure is important
+- explicit regression models are desired
+- conservative shrinkage of augmented inference is required
+
+## 5.2 Feeder construction
+
+First draw a bootstrap sample:
+
+\begin{equation}
+\tilde{D} \sim \mathrm{Bootstrap}(D, n_{\mathrm{aug}}, \mathrm{replace})
+\end{equation}
+
+Then perturb synthesized variables to obtain the feeder dataset:
+
+\begin{equation}
+\tilde{D}_{\mathrm{noise}}
+\end{equation}
+
+## 5.3 Predictor selection
+
+For each target variable \(v_m\), define a predictor set
+\(Z_m \subseteq V \setminus \{v_m\}\).
+
+The current implementation supports four modes:
+
+- `"full"`: use all other synthesized variables
+- `"random"`: sample `predictor_k` variables uniformly
+- `"information"`: select the top `predictor_k` variables by normalized
+  mutual information
+- `"random_information"`: select the top `5 \times predictor_k`
+  informative variables, then sample `predictor_k` among them
+
+If `predictor_k = NULL`:
+
+\begin{equation}
+\mathrm{predictor\_k} =
+\max\left(1,\; \mathrm{round}\left(\frac{p - 1}{3}\right)\right)
+\end{equation}
+
+Normalized mutual information is computed as:
+
+\begin{equation}
+\mathrm{NMI}(X, Y) =
+\frac{I(X;Y)}{\max(H(X), H(Y))}
+\end{equation}
+
+where \(I(\cdot;\cdot)\) is mutual information and \(H(\cdot)\) is
+entropy. Continuous variables are discretized internally for this
+ranking step.
+
+## 5.4 Family assignment
+
+Each target variable is assigned a `brms` family either manually through
+`families` or automatically through `assign_families()`.
+
+Typical mappings in the current implementation are:
+
+- binary factor \(\rightarrow\) Bernoulli
+- ordered factor or Likert-like integer \(\rightarrow\) cumulative logit
+- unordered factor \(\rightarrow\) categorical logit
+- non-negative count-like integer \(\rightarrow\) Poisson or negative
+  binomial
+- proportion in \((0, 1)\) \(\rightarrow\) Beta
+- continuous numeric \(\rightarrow\) Gaussian
+
+## 5.5 Shrinkage prior
+
+For slope coefficients:
+
+\begin{equation}
+\beta_{jm} \sim \mathcal{N}(0,\; \sigma_\beta^2)
+\end{equation}
+
+with:
+
+\begin{equation}
+\sigma_\beta =
+\frac{\mathrm{base\_sd}}
+{\left(1 + \frac{n_{\mathrm{syn}}}{n_{\mathrm{obs}}}\right)^k}
+\end{equation}
+
+where:
+
+- `base_sd` controls baseline prior width
+- `k` controls how rapidly shrinkage increases with augmentation
+
+This is a conservative regularization term. It is not intended as a
+claim that larger real samples must shrink effect sizes. Its purpose is
+to offset the anti-conservative tendency for augmented datasets to
+mechanically reduce p-values.
+
+For the intercept:
+
+\begin{equation}
+\alpha_m \sim
+\mathcal{N}(\bar{y}_m,\; (s_m \cdot \mathrm{sd\_scale})^2)
+\end{equation}
+
+where:
+
+- \(\bar{y}_m\) is the observed mean of the target
+- \(s_m\) is the observed standard deviation of the target
+
+## 5.6 Model fitting
+
+For each target variable \(v_m\), fit:
+
+\begin{equation}
+v_m \sim Z_m + C
+\end{equation}
+
+on the feeder dataset.
+
+The current implementation supports:
+
+- `backend = "rstan"`
+- `backend = "cmdstanr"`
+
+and the following `algorithm` values:
+
+- `"sampling"`
+- `"meanfield"`
+- `"fullrank"`
+- `"pathfinder"`
+- `"laplace"`
+- `"fixed_param"`
+
+Practical implementation note:
+
+- `cmdstanr` is generally more stable than `rstan` on Windows
+- the first run may be much slower due to Stan compilation caching
+
+## 5.7 Posterior predictive generation
+
+For each fitted model \(\mathcal{M}_m\):
+
+\begin{equation}
+\hat{y}_{im} \sim
+p(v_m \mid Z_{im}, C_i, \mathcal{M}_m)
+\end{equation}
+
+Predictions are drawn row-wise for the feeder dataset, then reconstructed
+to the original variable type:
+
+- continuous outputs remain numeric
+- integer/count outputs are rounded
+- factor and ordered outputs are mapped back to valid levels
+
+The final synthetic dataset is assembled by column-wise combination of
+all target predictions, with covariates appended from the feeder data.
+
+## 5.8 BRM pseudocode
+
+```text
+INPUT: observed data D, synthesized variables V, covariates C, settings theta
+
+1. Draw bootstrap feeder sample D_boot of size n_aug
+2. Add noise to synthesized columns -> D_feed
+3. For each target variable v in V:
+   a. Select predictor set Z_v
+   b. Assign outcome family F_v
+   c. Build shrinkage prior for slopes
+   d. Build intercept prior from observed target distribution
+   e. Fit brms model M_v on D_feed
+   f. Draw posterior predictions for feeder rows
+   g. Reconstruct output to the original variable type
+4. Combine synthetic target columns
+5. Append covariates from D_feed
+6. Return models and synthetic data
+```
+
+# 6. Copula engine
+
+## 6.1 Rationale
+
+The copula engine synthesizes data through a subgroup-aware joint
+dependence model rather than separate conditional regressions. It is
+appropriate when:
+
+- preserving dependence structure is the primary goal
+- subgroup-specific structure matters
+- empirical rather than parametric marginal reconstruction is preferred
+
+## 6.2 Group construction
+
+If covariates are supplied, define subgroup labels:
+
+\begin{equation}
+g_i = \mathrm{interaction}(c_{i1}, \dots, c_{iq})
+\end{equation}
+
+Each unique covariate combination defines a subgroup. Without
+covariates, all rows belong to a single group.
+
+## 6.3 Global correlation target
+
+The current implementation computes:
+
+\begin{equation}
+R_{\mathrm{global}} =
+\mathrm{cor.shrink}(D[V])
+\end{equation}
+
+using `corpcor::cor.shrink()`.
+
+## 6.4 Subgroup feeder sizing
+
+For each subgroup \(g\), let \(n_g\) be observed subgroup size and
+\(\pi_g = n_g / n_{\mathrm{obs}}\) its observed proportion.
+
+Define the feeder target size:
+
+\begin{equation}
+n_g^{\mathrm{target}} =
+\max\left(
+n_g,\;
+\lceil \pi_g \cdot n_{\mathrm{aug}} \rceil,\;
+\max(10,\; 2p)
+\right)
+\end{equation}
+
+and the number of synthetic feeder rows:
+
+\begin{equation}
+n_g^{\mathrm{syn}} =
+\max\left(n_g^{\mathrm{target}} - n_g,\; 0\right)
+\end{equation}
+
+This ensures that feeder expansion is proportional and avoids assigning
+the full `n_aug` to multiple subgroups.
+
+## 6.5 Feeder construction by subgroup
+
+For each subgroup \(g\):
+
+1. bootstrap \(n_g^{\mathrm{syn}}\) subgroup rows
+2. add noise to synthesized variables
+3. pool those noisy rows with the observed subgroup rows
+
+yielding:
+
+\begin{equation}
+D_{\mathrm{feed}}^{(g)}
+\end{equation}
+
+## 6.6 Subgroup correlation shrinkage
+
+For each subgroup feeder dataset, compute:
+
+\begin{equation}
+R_g^{\mathrm{raw}} =
+\mathrm{cor.shrink}\left(D_{\mathrm{feed}}^{(g)}[V]\right)
+\end{equation}
+
+Then blend it with the global target:
+
+\begin{equation}
+R_g^\star =
+\lambda_g R_g^{\mathrm{raw}} +
+(1 - \lambda_g) R_{\mathrm{global}}
+\end{equation}
+
+where:
+
+\begin{equation}
+\lambda_g =
+\frac{n_g^{\mathrm{feed}}}{n_g^{\mathrm{feed}} + s}
+\end{equation}
+
+and `s = 30` in the current implementation of `shrink_cormat()`.
+
+The correlation matrix is then stabilized by:
+
+- symmetrization
+- eigenvalue flooring
+- rescaling to unit diagonal
+
+This produces a positive-definite correlation matrix suitable for
+simulation.
+
+## 6.7 Gaussian copula simulation
+
+For each subgroup:
+
+\begin{equation}
+Z_g \sim \mathcal{N}(0,\; R_g^\star)
+\end{equation}
+
+and then:
+
+\begin{equation}
+U_g = \Phi(Z_g)
+\end{equation}
+
+where \(\Phi\) is the standard normal cumulative distribution function.
+
+The current implementation simulates the Gaussian copula draw directly
+from the stabilized correlation matrix rather than relying on a less
+tolerant subgroup simulation path.
+
+## 6.8 Empirical marginal reconstruction
+
+For subgroup \(g\) and variable \(v\), synthetic values are reconstructed
+through the empirical subgroup margin:
+
+\begin{equation}
+\tilde{x}_{iv}^{(g)} = F_{vg}^{-1}(u_{iv})
+\end{equation}
+
+where:
+
+- \(u_{iv}\) is the copula draw
+- \(F_{vg}^{-1}\) is the empirical quantile map for variable \(v\) in
+  subgroup \(g\)
+
+Current reconstruction rules:
+
+- continuous variables use empirical quantiles
+- integer-like variables use discrete quantile reconstruction
+- factor and ordered variables are mapped back to valid levels
+
+This is a substantive methodological point: the current copula engine
+uses **empirical margins**, not normal parametric margins.
+
+## 6.9 Output assembly
+
+For each subgroup:
+
+1. generate subgroup synthetic rows
+2. reconstruct all synthesized margins
+3. append fixed subgroup covariates
+
+The subgroup outputs are then concatenated while preserving overall
+group proportions to sum to `n_aug`.
+
+## 6.10 Copula pseudocode
+
+```text
+INPUT: observed data D, synthesized variables V, covariates C, settings theta
+
+1. Partition D into subgroups by covariate combinations
+2. Compute global shrinkage correlation matrix R_global
+3. For each subgroup g:
+   a. Determine target feeder size
+   b. Bootstrap additional subgroup rows
+   c. Add noise to synthesized variables
+   d. Pool noisy rows with observed subgroup rows
+   e. Compute subgroup shrinkage correlation matrix
+   f. Blend with the global target and stabilize
+   g. Simulate Gaussian copula uniforms
+   h. Map uniforms through empirical subgroup margins
+   i. Append subgroup covariates
+4. Combine subgroup outputs
+5. Return subgroup models and synthetic data
+```
+
+# 7. Arguments and options
+
+## 7.1 Common arguments
+
+| Argument | Meaning |
+|---|---|
+| `data` | observed data frame |
+| `variables` | columns to synthesize |
+| `covariates` | columns to condition on / append unchanged |
+| `engine` | `"brm"`, `"copula"`, `"bart"`, `"factor"`, or `"graphical"` |
+| `noise_method` | `"discrete"`, `"truncnormal"`, `"gaussian"`, `"random"` |
+| `c` | direct noise scale or `"auto"` |
+| `round_int` | whether integer-like values are rounded after perturbation |
+| `p` | non-zero perturbation probability in discrete auto mode |
+| `f` | variance ratio in continuous auto mode |
+| `r` | uniform-noise half-range for random mode |
+| `noise_bounds` | optional explicit clamp range |
+| `replace` | bootstrap replacement flag |
+| `n_aug` | requested synthetic sample size |
+| `prop_aug` | proportional alternative to `n_aug` |
+| `seed` | random seed |
+
+## 7.2 BRM-specific arguments
+
+| Argument | Meaning |
+|---|---|
+| `predictor_method` | predictor selection strategy |
+| `predictor_k` | number of synthesized predictors per target |
+| `families` | manual `brms` family mapping |
+| `base_sd` | baseline slope prior width |
+| `sd_scale` | intercept prior scale multiplier |
+| `k` | shrinkage exponent |
+| `chains` | number of chains |
+| `cores` | number of compute cores |
+| `iter` | total iterations per chain |
+| `warmup` | warmup iterations |
+| `thin` | thinning interval |
+| `algorithm` | Stan fitting algorithm |
+| `backend` | `"rstan"` or `"cmdstanr"` |
+
+## 7.3 Copula-specific implementation behavior
+
+The copula engine currently:
+
+- constructs subgroup-specific feeders
+- uses `corpcor::cor.shrink()`
+- uses `shrink_cormat()` with `shrink_const = 30`
+- stabilizes correlation matrices before simulation
+- reconstructs margins empirically
+
+## 7.4 Additional engine controls
+
+The newer engines use `engine_control` for engine-specific
+tuning:
+
+- `engine = "bart"`:
+  `num_trees`, `num_burn`, `num_draws`, `k_bart`, `power`, `base`,
+  `binary_threshold`
+- `engine = "factor"`:
+  `n_factors`, `correlation_method`, `extraction_method`,
+  `loading_shrink`, `uniqueness_floor`, `threshold_method`
+- `engine = "graphical"`:
+  `transform`, `selection`, `ebic_gamma`, `lambda_fixed`, `pd_tol`
+
+# 8. BART engine
+
+## 8.1 Rationale
+
+The BART engine is the nonlinear conditional engine in SYDNI. It is
+appropriate when:
+
+- conditional structure is the main target
+- meaningful nonlinearities or interactions are plausible
+- the analyst wants native covariate conditioning without moving to a
+  dependence-first engine
+
+Relative to the other engines:
+
+- compared with `brm`, `bart` trades clearer parametric interpretation
+  for nonlinear conditional flexibility
+- compared with `copula`, `bart` remains target-wise and conditional
+  rather than dependence-first
+- compared with `factor`, `bart` does not target latent psychometric
+  structure
+- compared with `graphical`, `bart` does not target sparse direct
+  dependence
+
+## 8.2 Feeder construction
+
+As in BRM, draw:
+
+\begin{equation}
+\tilde{D} \sim \mathrm{Bootstrap}(D, n_{\mathrm{aug}}, \mathrm{replace})
+\end{equation}
+
+and perturb synthesized columns to obtain:
+
+\begin{equation}
+\tilde{D}_{\mathrm{noise}}
+\end{equation}
+
+## 8.3 Predictor selection
+
+For each target variable \(v_m\), define a predictor set
+\(Z_m \subseteq V \setminus \{v_m\}\) using the same predictor-selection
+rules as BRM:
+
+- `"full"`
+- `"random"`
+- `"information"`
+- `"random_information"`
+
+Covariates \(C\) are appended directly to the design matrix.
+
+## 8.4 Conditional tree ensemble
+
+For each target \(v_m\), BART fits:
+
+\begin{equation}
+v_m = \sum_{t=1}^{T} g_t(Z_m, C) + \varepsilon
+\end{equation}
+
+where:
+
+- \(T = \mathrm{num\_trees}\)
+- each \(g_t\) is a regression tree with terminal-node parameters
+- \(\varepsilon\) is the residual term implied by the BART fit
+
+## 8.5 Augmentation-linked regularization
+
+Let:
+
+\begin{equation}
+r_{\mathrm{aug}} = \frac{n_{\mathrm{aug}}}{n_{\mathrm{obs}}}
+\end{equation}
+
+The current implementation increases conservatism with augmentation via:
+
+\begin{equation}
+k_{\mathrm{eff}} = k_{\mathrm{bart}} \cdot (1 + r_{\mathrm{aug}})^k
+\end{equation}
+
+\begin{equation}
+\mathrm{power}_{\mathrm{eff}} =
+\mathrm{power} + \log(1 + r_{\mathrm{aug}})
+\end{equation}
+
+\begin{equation}
+\mathrm{base}_{\mathrm{eff}} =
+\min\left(0.99,\; \mathrm{base} + 0.02 \log(1 + r_{\mathrm{aug}})\right)
+\end{equation}
+
+These parameters govern how aggressively the tree ensemble is regularized
+as synthetic sample size grows.
+
+## 8.6 Outcome handling
+
+The current implementation supports three target-handling modes:
+
+- continuous targets:
+  fit directly and return numeric posterior predictions
+- binary targets:
+  fit numerically and threshold posterior predictions at
+  `binary_threshold`
+- ordinal-like targets:
+  fit numerically as an approximation, then round/clamp outputs back to
+  observed support with a warning
+
+For binary targets:
+
+\begin{equation}
+\tilde{y}_{im} =
+\mathbb{I}\left(\hat{y}_{im} \ge \tau\right)
+\end{equation}
+
+where \(\tau = \mathrm{binary\_threshold}\).
+
+## 8.7 Posterior predictive generation
+
+Posterior predictive draws are sampled from the BART test-set posterior
+matrix and reconstructed to the observed variable support.
+
+## 8.8 BART pseudocode
+
+```text
+INPUT: observed data D, variables V, covariates C, settings theta
+
+1. Draw bootstrap feeder sample D_boot of size n_aug
+2. Add noise to synthesized columns -> D_feed
+3. For each target variable v in V:
+   a. Select predictor set Z_v
+   b. Build numeric design matrix from Z_v and C
+   c. Compute augmentation-linked BART regularization
+   d. Fit BART model M_v on D_feed
+   e. Draw posterior predictions for feeder rows
+   f. Reconstruct binary / ordinal-like outputs to observed support
+4. Combine synthetic target columns
+5. Append covariates from D_feed
+6. Return models and synthetic data
+```
+
+# 9. Factor engine
+
+## 9.1 Rationale
+
+The factor engine is the latent psychometric engine in SYDNI. It is
+appropriate when:
+
+- the synthesized variables are item batteries or ordinal psychometric
+  indicators
+- the substantive target is latent structure rather than only observed
+  dependence
+- robustness should be evaluated relative to a common-factor style data
+  generating process
+
+Relative to the other engines:
+
+- compared with `brm` and `bart`, `factor` models shared latent
+  structure rather than separate conditional targets
+- compared with `copula`, `factor` is about latent measurement
+  structure rather than only observed dependence preservation
+- compared with `graphical`, `factor` assumes common causes rather than
+  sparse direct links among observed variables
+
+## 9.2 Group construction
+
+If covariates are supplied, define subgroup labels:
+
+\begin{equation}
+g_i = \mathrm{interaction}(c_{i1}, \dots, c_{iq})
+\end{equation}
+
+The current implementation fits subgroup-specific factor models rather
+than conditioning on covariates natively.
+
+## 9.3 Groupwise feeder construction
+
+Within each subgroup, construct feeder data exactly as in the copula
+engine:
+
+1. bootstrap subgroup rows
+2. inject noise into synthesized variables
+3. pool noisy subgroup rows with observed subgroup rows
+
+This yields subgroup feeder data:
+
+\begin{equation}
+D_{\mathrm{feed}}^{(g)}
+\end{equation}
+
+## 9.4 Active-item detection
+
+Within each subgroup, items with no variance are marked inactive and are
+not used in the subgroup factor fit. Let \(A_g \subseteq V\) denote the
+active subgroup items.
+
+If too few active items remain, the current implementation falls back to
+empirical subgroup reconstruction instead of crashing.
+
+## 9.5 Correlation estimation
+
+For the active subgroup items, estimate:
+
+\begin{equation}
+R_g =
+\begin{cases}
+\mathrm{polychoric}(D_{\mathrm{feed}}^{(g)}[A_g]), & \text{if polychoric mode} \\
+\mathrm{cor}(D_{\mathrm{feed}}^{(g)}[A_g]), & \text{otherwise}
+\end{cases}
+\end{equation}
+
+If polychoric estimation fails, the implementation falls back to
+pairwise Pearson correlation.
+
+## 9.6 Factor model estimation
+
+Estimate a factor model with \(q_f = \mathrm{n\_factors}\) latent
+dimensions:
+
+\begin{equation}
+Y_g = F_g \Lambda_g^\top + E_g
+\end{equation}
+
+where:
+
+- \(F_g\) is the latent-factor score matrix
+- \(\Lambda_g\) is the loading matrix
+- \(E_g\) is the residual term with uniquenesses \(\Psi_g\)
+
+## 9.7 Augmentation-linked shrinkage
+
+Let:
+
+\begin{equation}
+r_{\mathrm{aug}} = \frac{n_{\mathrm{aug}}}{n_{\mathrm{obs}}}
+\end{equation}
+
+The loading multiplier is:
+
+\begin{equation}
+m_{\Lambda} =
+\frac{1}{(1 + r_{\mathrm{aug}})^{k \cdot \mathrm{loading\_shrink}}}
+\end{equation}
+
+The shrunken loadings are:
+
+\begin{equation}
+\Lambda_g^\star = m_{\Lambda} \Lambda_g
+\end{equation}
+
+Factor correlations are regularized toward identity:
+
+\begin{equation}
+\Phi_g^\star = (1 - m_{\Lambda}) I + m_{\Lambda} \Phi_g
+\end{equation}
+
+Uniquenesses are lower-bounded by an augmentation-linked floor:
+
+\begin{equation}
+\psi_{jg}^\star =
+\min\left(0.99,\;
+\max\left(\psi_{jg},\;
+\mathrm{uniqueness\_floor} \cdot (1 + \log(1 + r_{\mathrm{aug}}))
+\right)\right)
+\end{equation}
+
+## 9.8 Latent-data generation
+
+Generate latent factors:
+
+\begin{equation}
+F_g^\star \sim \mathcal{N}(0,\; \Phi_g^\star)
+\end{equation}
+
+and residuals:
+
+\begin{equation}
+E_g^\star \sim \mathcal{N}(0,\; \Psi_g^\star)
+\end{equation}
+
+Then construct latent item values:
+
+\begin{equation}
+Y_g^\star = F_g^\star (\Lambda_g^\star)^\top + E_g^\star
+\end{equation}
+
+## 9.9 Empirical marginal reconstruction
+
+For each active item, transform latent item draws to uniforms via the
+standard normal CDF and map them back through empirical subgroup
+margins:
+
+\begin{equation}
+u_{ijg} = \Phi(z_{ijg})
+\end{equation}
+
+\begin{equation}
+\tilde{x}_{ijg} = F_{jg}^{-1}(u_{ijg})
+\end{equation}
+
+Inactive subgroup items are reconstructed directly from their observed
+subgroup support.
+
+## 9.10 Fallback behavior
+
+If subgroup factor fitting is not viable, the current implementation
+falls back to empirical subgroup reconstruction rather than returning an
+invalid latent fit.
+
+## 9.11 Factor pseudocode
+
+```text
+INPUT: observed data D, variables V, covariates C, settings theta
+
+1. Partition D into subgroups by covariate combinations
+2. Build noisy feeder data within each subgroup
+3. For each subgroup g:
+   a. Identify active (non-constant) subgroup items A_g
+   b. Estimate subgroup correlation matrix R_g
+   c. Fit factor model on A_g
+   d. Shrink loadings, factor correlations, and uniquenesses
+   e. Generate latent factor draws and residuals
+   f. Construct latent item values
+   g. Map active items back through empirical subgroup margins
+   h. Reconstruct inactive items safely from observed subgroup support
+   i. If factor fitting fails, fall back to empirical subgroup reconstruction
+4. Combine subgroup outputs
+5. Return subgroup models and synthetic data
+```
+
+# 10. Graphical engine
+
+## 10.1 Rationale
+
+The graphical engine is the sparse direct-dependence engine in SYDNI.
+It is appropriate when:
+
+- direct conditional dependence is the scientific target
+- network-like or sparse structure is substantively meaningful
+- the analyst wants something more structured than a dense copula
+  association model
+
+Relative to the other engines:
+
+- compared with `copula`, `graphical` emphasizes sparse direct
+  dependence rather than dense overall dependence
+- compared with `brm` and `bart`, `graphical` is not primarily a
+  conditional prediction engine
+- compared with `factor`, `graphical` emphasizes conditional links among
+  observed variables rather than latent common causes
+
+## 10.2 Group construction
+
+If covariates are supplied, define subgroup labels:
+
+\begin{equation}
+g_i = \mathrm{interaction}(c_{i1}, \dots, c_{iq})
+\end{equation}
+
+As in the copula and factor engines, the graphical engine fits
+subgroup-specific models.
+
+## 10.3 Groupwise feeder construction
+
+Within each subgroup, construct feeder data through subgroup bootstrap
+and noise injection:
+
+\begin{equation}
+D_{\mathrm{feed}}^{(g)}
+\end{equation}
+
+## 10.4 Latent Gaussian transform
+
+For subgroup \(g\), transform observed subgroup data to an approximately
+Gaussian latent space. In the default nonparanormal mode:
+
+\begin{equation}
+Z_g = \mathrm{npn}(D_{\mathrm{feed}}^{(g)}[V])
+\end{equation}
+
+Columns with effectively zero latent variance are excluded from sparse
+graph estimation.
+
+## 10.5 Sparse precision estimation
+
+On the active subgroup latent variables, estimate a sparse precision
+matrix:
+
+\begin{equation}
+\Omega_g
+\end{equation}
+
+using graphical lasso through `huge`.
+
+If `selection = "ebic"`, the tuning criterion is adjusted as
+augmentation grows:
+
+\begin{equation}
+\gamma_{\mathrm{eff}} =
+\min\left(1,\;
+\gamma_0 + 0.15 \log(1 + r_{\mathrm{aug}})\cdot k\right)
+\end{equation}
+
+where:
+
+- \(\gamma_0 = \mathrm{ebic\_gamma}\)
+- \(r_{\mathrm{aug}} = n_{\mathrm{aug}} / n_{\mathrm{obs}}\)
+
+This makes structure selection more conservative as augmentation grows.
+
+## 10.6 Correlation reconstruction
+
+Convert the selected precision matrix to a latent correlation matrix:
+
+\begin{equation}
+\Sigma_g = \mathrm{cov2cor}(\Omega_g^{-1})
+\end{equation}
+
+Then stabilize:
+
+- symmetrize
+- floor small eigenvalues
+- rescale to unit diagonal
+
+If sparse estimation fails, the current implementation falls back to the
+stabilized active-variable correlation matrix instead of erroring.
+
+## 10.7 Gaussian simulation and empirical margins
+
+Generate Gaussian latent draws:
+
+\begin{equation}
+Z_g^\star \sim \mathcal{N}(0,\; \Sigma_g)
+\end{equation}
+
+Transform to uniforms:
+
+\begin{equation}
+U_g = \Phi(Z_g^\star)
+\end{equation}
+
+Then reconstruct observed subgroup margins empirically:
+
+\begin{equation}
+\tilde{x}_{iv}^{(g)} = F_{vg}^{-1}(u_{iv})
+\end{equation}
+
+This matches the copula engine's empirical marginal reconstruction path,
+but uses a sparse direct-dependence model instead of a dense copula
+correlation model.
+
+## 10.8 Graphical pseudocode
+
+```text
+INPUT: observed data D, variables V, covariates C, settings theta
+
+1. Partition D into subgroups by covariate combinations
+2. Build noisy feeder data within each subgroup
+3. For each subgroup g:
+   a. Transform subgroup feeder data to latent Gaussian space
+   b. Identify active subgroup variables with non-zero latent variance
+   c. Estimate sparse precision structure on the active variables
+   d. Convert precision matrix to a stabilized correlation matrix
+   e. If sparse estimation fails, fall back to stabilized latent correlation
+   f. Simulate Gaussian latent draws
+   g. Transform latent draws to uniforms
+   h. Map uniforms back through empirical subgroup margins
+   i. Append subgroup covariates
+4. Combine subgroup outputs
+5. Return subgroup models and synthetic data
+```
+
+# 11. Interpretation and reporting
+
+SYDNI should be interpreted as a **secondary robustness framework**.
+Synthetic rows are not additional empirical evidence.
+
+## 11.1 Interpretation rules
+
+1. The original-sample analysis remains primary.
+2. SYDNI analyses are secondary robustness or sensitivity analyses.
+3. If a result appears in both the original and augmented analyses, that
+   is more reassuring than either analysis alone.
+4. If a result is absent in the original data but appears only after
+   augmentation, that augmented result should be interpreted as fragile,
+   exploratory, or suggestive rather than confirmatory.
+
+## 11.2 Reporting recommendations
+
+When SYDNI is used in a paper or technical report:
+
+1. Report the original analysis first.
+2. Report SYDNI analyses alongside the original analysis, not in place
+   of it.
+3. Report the full settings used:
+   - `engine`
+   - `n_aug` or `prop_aug`
+   - `noise_method`
+   - `c`, `p`, `f`, `r`
+   - `predictor_method`
+   - `predictor_k`
+   - `base_sd`
+   - `k`
+   - `algorithm`
+   - `backend`
+   - `seed`
+4. If possible, report whether conclusions are stable across multiple
+   reasonable settings.
+
+Suggested wording:
+
+> SYDNI analyses were treated as secondary robustness checks alongside
+> the original-sample analyses. Synthetic augmentation was not
+> interpreted as additional empirical evidence, and effects that
+> appeared only after augmentation were interpreted cautiously.
+
+# 12. Known limitations
+
+1. SYDNI cannot create genuine empirical information not present in the
+   observed sample.
+2. Very small subgroup cells can still produce unstable synthetic
+   structure.
+3. The BRM and BART engines depend on the adequacy of conditional-model
+   specification and supported outcome types.
+4. The copula and graphical engines preserve dependence only through
+   the subgroup partition and correlation / precision model.
+5. The factor engine is currently targeted to ordinal or integer-like
+   psychometric item batteries rather than general mixed-type data.
+6. BRM setup can require Stan toolchain dependencies through `brms`,
+   `rstan`, or `cmdstanr`, while the additional engines require their
+   own optional packages (`dbarts`, `psych`, `huge`).
+
+# 13. Example calls
+
+## 13.1 Copula wrapper
+
+```{r}
+result <- sydni(
+  data = grit_complete,
+  variables = c(sprintf("o%01d", seq(10)), sprintf("e%01d", seq(10))),
+  covariates = c("gs1", "gs2"),
+  n_aug = 100,
+  engine = "copula",
+  noise_method = "discrete",
+  p = 0.2,
+  seed = 123
+)
+```
+
+## 13.2 BRM wrapper
+
+```{r}
+result <- sydni(
+  data = grit_complete[, c(variables[1:4], covariates), drop = FALSE],
+  variables = variables[1:4],
+  covariates = covariates,
+  engine = "brm",
+  n_aug = 20,
+  predictor_k = 2,
+  iter = 50,
+  warmup = 25,
+  chains = 1,
+  cores = 1,
+  algorithm = "sampling",
+  backend = "cmdstanr",
+  seed = 123
+)
+```
+
+# 14. Summary
+
+SYDNI is best understood as a conservative synthetic perturbation
+framework for stress-testing analytic conclusions under
+structure-preserving augmentation. Its value lies in how synthetic
+results behave relative to the original analysis, not in treating
+synthetic rows as confirmatory evidence.
