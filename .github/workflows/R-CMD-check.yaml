@@ -26,4 +26,4 @@ jobs:
 
       - uses: r-lib/actions/check-r-package@v2
         with:
-          args: --no-manual
+          args: 'c("--no-manual")'
