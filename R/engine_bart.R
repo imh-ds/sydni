@@ -249,7 +249,7 @@
 #'   mode, target-specific model entries are retained and `models$all` contains
 #'   shared structural-calibration metadata.
 #'
-#' @importFrom utils modifyList
+#' @importFrom utils modifyList head
 #' @export
 engine_bart <- function(
     data,

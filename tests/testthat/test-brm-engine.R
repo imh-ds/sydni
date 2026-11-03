@@ -37,11 +37,21 @@ test_that("empirical BRM intercept priors skip factor outcomes", {
 })
 
 test_that("package metadata keeps brms optional", {
-  desc <- readLines(testthat::test_path("..", "..", "DESCRIPTION"))
-  namespace <- readLines(testthat::test_path("..", "..", "NAMESPACE"))
+  desc_path <- system.file("DESCRIPTION", package = "sydni")
+  namespace_path <- system.file("NAMESPACE", package = "sydni")
+  if (!nzchar(desc_path)) {
+    desc_path <- testthat::test_path("..", "..", "DESCRIPTION")
+    namespace_path <- testthat::test_path("..", "..", "NAMESPACE")
+  }
+  skip_if_not(file.exists(desc_path) && file.exists(namespace_path))
+  dcf <- read.dcf(desc_path, fields = c("Imports", "Suggests"))
+  namespace <- readLines(namespace_path)
+  field_pkgs <- function(x) {
+    trimws(sub("\\s*\\(.*\\)\\s*$", "", strsplit(x, ",")[[1]]))
+  }
 
-  expect_false(any(grepl("^\\s*brms\\s*,?$", desc[seq(which(grepl("^Imports:$", desc)) + 1, which(grepl("^Suggests:$", desc)) - 1)])))
-  expect_true(any(grepl("^\\s*brms\\s*,?$", desc[seq(which(grepl("^Suggests:$", desc)) + 1, which(grepl("^Remotes:$", desc)) - 1)])))
+  expect_false("brms" %in% field_pkgs(dcf[1, "Imports"]))
+  expect_true("brms" %in% field_pkgs(dcf[1, "Suggests"]))
   expect_false(any(grepl("^importFrom\\(brms,", namespace)))
 })
 
