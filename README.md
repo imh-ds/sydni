@@ -384,6 +384,32 @@ Suggested paper language:
 The package now includes a starter benchmark framework under
 `inst/benchmarks/` and a methodology vignette under `vignettes/`.
 
+## Repository layout
+
+This is an R package, so the standard package folders come first.
+
+| Path | What it holds |
+|---|---|
+| `R/`, `man/`, `NAMESPACE`, `DESCRIPTION` | package code, help pages and metadata |
+| `data/` | the bundled `grit` example data |
+| `tests/testthat/` | unit tests, run by `R CMD check` |
+| `vignettes/` | the tutorial, methodology and technical-methods vignettes |
+| `docs/tutorial.md` | a short, informal walkthrough for GitHub readers |
+| `inst/benchmarks/` | benchmark and simulation frameworks (see its `README.md`) |
+| `results/benchmarks/` | the small confirmation files that are tracked, plus `known_issues.md` |
+| `.github/workflows/` | continuous integration (`R-CMD-check`, `validation-launcher`) |
+| `LICENSE`, `CITATION.cff`, `NEWS.md` | license, citation record and change log |
+
+Large simulation outputs, manuscripts and working notes are kept outside
+the repository on purpose. `inst/benchmarks/` and `results/` are left out
+of the built package through `.Rbuildignore`.
+
+## License
+
+`sydni` is released under GPL (>= 2), as stated in `DESCRIPTION`: you may
+use, modify and redistribute it under version 2 of the GNU General Public
+License or, at your option, any later version.
+
 ## Citation
 
 If you use `sydni` in published work, please cite:
