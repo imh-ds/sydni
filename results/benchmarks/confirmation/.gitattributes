@@ -1,0 +1,5 @@
+study1_nonbrm_confirmation_raw.csv -text
+study1_brm_confirmation_raw.csv -text
+study2_nonbrm_confirmation_raw.csv -text
+study2_brm_confirmation_raw.csv -text
+paired_block_bootstrap.csv -text
